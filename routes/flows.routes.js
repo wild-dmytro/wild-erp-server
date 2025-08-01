@@ -428,9 +428,9 @@ router.post(
       .isString()
       .isLength({ max: 255 }),
     check("message", "Повідомлення є обов'язковим").notEmpty().isString(),
-    check("priority", "Недійсний пріоритет")
-      .optional()
-      .isIn(["low", "normal", "high", "urgent"]),
+    // check("priority", "Недійсний пріоритет")
+    //   .optional()
+    //   .isIn(["low", "normal", "high", "urgent"]),
     check("is_urgent", "is_urgent має бути булевим значенням")
       .optional()
       .isBoolean(),
@@ -457,9 +457,9 @@ router.post(
       .isString()
       .isLength({ max: 255 }),
     check("message", "Повідомлення є обов'язковим").notEmpty().isString(),
-    check("priority", "Недійсний пріоритет")
-      .optional()
-      .isIn(["low", "normal", "high", "urgent"]),
+    // check("priority", "Недійсний пріоритет")
+    //   .optional()
+    //   .isIn(["low", "normal", "high", "urgent"]),
     check("is_urgent", "is_urgent має бути булевим значенням")
       .optional()
       .isBoolean(),
