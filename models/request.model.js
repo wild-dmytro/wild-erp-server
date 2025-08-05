@@ -250,14 +250,16 @@ const getWeeklyExpenseSummary = async ({
       DATE_TRUNC('week', r.created_at)::date as week_start,
       (DATE_TRUNC('week', r.created_at) + INTERVAL '6 days')::date as week_end,
       SUM(CASE WHEN r.request_type = 'agent_refill' THEN ar.amount ELSE 0 END) as total_agent_refill,
-      SUM(CASE WHEN r.request_type = 'expenses' AND r.department_id = 1 THEN er.amount ELSE 0 END) as total_buying_expenses,
-      SUM(CASE WHEN r.request_type = 'expenses' AND (r.department_id IS NULL OR r.department_id != 1) THEN er.amount ELSE 0 END) as total_other_expenses
+      SUM(CASE WHEN r.request_type = 'expenses' AND d.type = 'buying' THEN er.amount ELSE 0 END) as total_buying_expenses,
+      SUM(CASE WHEN r.request_type = 'expenses' AND (d.type IS NULL OR d.type != 'buying') THEN er.amount ELSE 0 END) as total_other_expenses
     FROM
       requests r
     LEFT JOIN
       agent_refill_requests ar ON r.id = ar.request_id AND r.request_type = 'agent_refill'
     LEFT JOIN
       expense_requests er ON r.id = er.request_id AND r.request_type = 'expenses'
+    LEFT JOIN
+      departments d ON r.department_id = d.id
     WHERE
       ${requestWhereClause}
     GROUP BY
@@ -429,14 +431,16 @@ const getMonthlyExpenseSummary = async ({
     SELECT
       EXTRACT(MONTH FROM r.created_at)::integer as month,
       SUM(CASE WHEN r.request_type = 'agent_refill' THEN ar.amount ELSE 0 END) as total_agent_refill,
-      SUM(CASE WHEN r.request_type = 'expenses' AND r.department_id = 1 THEN er.amount ELSE 0 END) as total_buying_expenses,
-      SUM(CASE WHEN r.request_type = 'expenses' AND (r.department_id IS NULL OR r.department_id != 1) THEN er.amount ELSE 0 END) as total_other_expenses
+      SUM(CASE WHEN r.request_type = 'expenses' AND d.type = 'buying' THEN er.amount ELSE 0 END) as total_buying_expenses,
+      SUM(CASE WHEN r.request_type = 'expenses' AND (d.type IS NULL OR d.type != 'buying') THEN er.amount ELSE 0 END) as total_other_expenses
     FROM
       requests r
     LEFT JOIN
       agent_refill_requests ar ON r.id = ar.request_id AND r.request_type = 'agent_refill'
     LEFT JOIN
       expense_requests er ON r.id = er.request_id AND r.request_type = 'expenses'
+    LEFT JOIN
+      departments d ON r.department_id = d.id
     WHERE
       ${requestWhereClause}
     GROUP BY
