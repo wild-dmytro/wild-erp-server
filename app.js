@@ -20,6 +20,7 @@ const sheetsRoutes = require('./routes/sheets.routes');
 const telegramRoutes = require('./routes/telegram.routes');
 const flowStatsRoutes = require('./routes/flow.stats.routes');
 const payoutAllocationRoutes = require('./routes/payout.allocation.routes');
+const bizdevRequestsRoutes = require('./routes/requests.routes');
 
 // BIZDEV маршрути
 const partnersRoutes = require('./routes/partners.routes');
@@ -96,6 +97,7 @@ app.use('/api/telegram', telegramRoutes);
 app.use('/api/sheets', sheetsRoutes);
 app.use('/api/flow-stats', flowStatsRoutes);
 app.use("/api/payout-allocations", payoutAllocationRoutes);
+app.use('/api/bizdev-requests', bizdevRequestsRoutes);
 
 // Тестові маршрути для Swagger авторизації (тільки в розробці)
 if (process.env.NODE_ENV === 'development') {
