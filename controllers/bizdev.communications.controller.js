@@ -14,7 +14,7 @@ const {
   searchCommunications
 } = require('../models/bizdev.communications.model');
 
-const { getRequestById } = require('../models/userRequest.model');
+const { getRequestById } = require('../models/bizdev.requests.model');
 
 /**
  * Додавання нового повідомлення до запиту
@@ -50,7 +50,7 @@ const addMessage = async (req, res) => {
     }
 
     // Перевіряємо права на внутрішні повідомлення
-    if (is_internal && !['admin', 'teamlead'].includes(req.user.role)) {
+    if (is_internal && !['admin', 'teamlead', 'bizdev'].includes(req.user.role)) {
       return res.status(403).json({
         success: false,
         message: 'Недостатньо прав для створення внутрішніх повідомлень'
@@ -110,7 +110,7 @@ const getMessages = async (req, res) => {
     }
 
     // Перевіряємо права на перегляд внутрішніх повідомлень
-    const canSeeInternal = ['admin', 'teamlead'].includes(req.user.role) || 
+    const canSeeInternal = ['admin', 'bizdev'].includes(req.user.role) || 
                           request.created_by === req.user.id || 
                           request.assigned_to === req.user.id;
 

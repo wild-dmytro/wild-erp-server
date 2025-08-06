@@ -20,7 +20,7 @@ const sheetsRoutes = require('./routes/sheets.routes');
 const telegramRoutes = require('./routes/telegram.routes');
 const flowStatsRoutes = require('./routes/flow.stats.routes');
 const payoutAllocationRoutes = require('./routes/payout.allocation.routes');
-const bizdevRequestsRoutes = require('./routes/requests.routes');
+const bizdevRequestsRoutes = require('./routes/bizdev.requests.routes.js');
 
 // BIZDEV маршрути
 const partnersRoutes = require('./routes/partners.routes');

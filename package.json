@@ -11,6 +11,7 @@
     "googleapis": "^150.0.1",
     "helmet": "^8.1.0",
     "jsonwebtoken": "^9.0.2",
+    "multer": "^2.0.2",
     "pg": "^8.14.1",
     "swagger-autogen": "^2.23.7",
     "swagger-jsdoc": "^6.2.8",

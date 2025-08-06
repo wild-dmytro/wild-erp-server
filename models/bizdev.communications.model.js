@@ -109,7 +109,7 @@ const getCommunicationById = async (communicationId, client = null) => {
 };
 
 /**
- * Отримання всіх повідомлень по запиту
+ * Отримання всіх повідомлень по запиту (ВИПРАВЛЕНА ВЕРСІЯ)
  * @param {number} requestId - ID запиту
  * @param {Object} options - Опції пагінації та фільтрації
  * @returns {Promise<Object>} Список повідомлень з метаданими
@@ -120,26 +120,27 @@ const getRequestCommunications = async (requestId, options = {}) => {
     message_type,
     page = 1,
     limit = 50,
-    sort_order = 'ASC' // За замовчуванням від старих до нових
+    sort_order = 'ASC'
   } = options;
 
   const offset = (page - 1) * limit;
-  const conditions = ['rc.request_id = $1'];
-  const params = [requestId];
-  let paramIndex = 2;
-
-  // Фільтри
+  
+  // Збираємо умови та параметри окремо
+  const whereConditions = ['rc.request_id = $1'];
+  const whereParams = [requestId];
+  
   if (!include_internal) {
-    conditions.push('rc.is_internal = false');
+    whereConditions.push('rc.is_internal = false');
   }
 
   if (message_type) {
-    conditions.push(`rc.message_type = ${paramIndex++}`);
-    params.push(message_type);
+    whereConditions.push(`rc.message_type = $${whereParams.length + 1}`);
+    whereParams.push(message_type);
   }
 
-  const whereClause = `WHERE ${conditions.join(' AND ')}`;
+  const whereClause = `WHERE ${whereConditions.join(' AND ')}`;
 
+  // ГОЛОВНА ПОМИЛКА БУЛА ТУТ: потрібно використовувати $1, $2 замість інтерполяції
   const query = `
     SELECT 
       rc.*,
@@ -155,50 +156,64 @@ const getRequestCommunications = async (requestId, options = {}) => {
     LEFT JOIN users editor ON rc.edited_by = editor.id
     ${whereClause}
     ORDER BY rc.created_at ${sort_order}
-    LIMIT ${paramIndex} OFFSET ${paramIndex + 1}
+    LIMIT $${whereParams.length + 1} OFFSET $${whereParams.length + 2}
   `;
 
-  params.push(limit, offset);
+  // Параметри для основного запиту включають фільтри + пагінацію
+  const queryParams = [...whereParams, limit, offset];
 
-  // Запит для підрахунку загальної кількості
+  // Запит для підрахунку (тільки фільтри, без пагінації)
   const countQuery = `
     SELECT COUNT(*) as total
     FROM bizdev_request_communications rc
     ${whereClause}
   `;
 
-  const [dataResult, countResult] = await Promise.all([
-    db.query(query, params),
-    db.query(countQuery, params.slice(0, -2))
-  ]);
+  // Додаємо логування для відладки
+  console.log('Query:', query);
+  console.log('Query params:', queryParams);
+  console.log('Count query:', countQuery);
+  console.log('Count params:', whereParams);
 
-  const total = parseInt(countResult.rows[0].total);
-  const communications = dataResult.rows.map(comm => ({
-    ...comm,
-    sender_info: {
-      id: comm.sender_id,
-      username: comm.sender_username,
-      first_name: comm.sender_first_name,
-      last_name: comm.sender_last_name,
-      role: comm.sender_role
-    },
-    edited_by_info: comm.edited_by ? {
-      id: comm.edited_by,
-      username: comm.edited_by_username,
-      first_name: comm.edited_by_first_name,
-      last_name: comm.edited_by_last_name
-    } : null
-  }));
+  try {
+    const [dataResult, countResult] = await Promise.all([
+      db.query(query, queryParams),
+      db.query(countQuery, whereParams) // Тільки параметри фільтрації
+    ]);
 
-  return {
-    communications,
-    pagination: {
-      page: parseInt(page),
-      limit: parseInt(limit),
-      total,
-      pages: Math.ceil(total / limit)
-    }
-  };
+    const total = parseInt(countResult.rows[0].total);
+    const communications = dataResult.rows.map(comm => ({
+      ...comm,
+      sender_info: {
+        id: comm.sender_id,
+        username: comm.sender_username,
+        first_name: comm.sender_first_name,
+        last_name: comm.sender_last_name,
+        role: comm.sender_role
+      },
+      edited_by_info: comm.edited_by ? {
+        id: comm.edited_by,
+        username: comm.edited_by_username,
+        first_name: comm.edited_by_first_name,
+        last_name: comm.edited_by_last_name
+      } : null
+    }));
+
+    return {
+      communications,
+      pagination: {
+        page: parseInt(page),
+        limit: parseInt(limit),
+        total,
+        pages: Math.ceil(total / limit)
+      }
+    };
+  } catch (error) {
+    console.error('Database query error:', error);
+    console.error('Помилковий запит:', query);
+    console.error('Параметри:', queryParams);
+    throw new Error(`Помилка отримання повідомлень: ${error.message}`);
+  }
 };
 
 /**

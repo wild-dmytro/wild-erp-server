@@ -66,7 +66,7 @@ const createUserRequest = async (requestData) => {
 
     // Додаємо початкове системне повідомлення
     const initialMessageQuery = `
-      INSERT INTO request_communications (
+      INSERT INTO bizdev_request_communications (
         request_id, sender_id, message_type, message
       )
       VALUES ($1, $2, 'system', $3)
@@ -109,7 +109,7 @@ const getRequestById = async (requestId, client = null) => {
     LEFT JOIN users creator ON ur.created_by = creator.id
     LEFT JOIN users assignee ON ur.assigned_to = assignee.id
     LEFT JOIN users updater ON ur.updated_by = updater.id
-    LEFT JOIN request_communications rc ON ur.id = rc.request_id
+    LEFT JOIN bizdev_request_communications rc ON ur.id = rc.request_id
     WHERE ur.id = $1
     GROUP BY ur.id, creator.id, assignee.id, updater.id
   `;
@@ -226,7 +226,7 @@ const getRequests = async (options = {}) => {
     FROM bizdev_requests ur
     LEFT JOIN users creator ON ur.created_by = creator.id
     LEFT JOIN users assignee ON ur.assigned_to = assignee.id
-    LEFT JOIN request_communications rc ON ur.id = rc.request_id
+    LEFT JOIN bizdev_request_communications rc ON ur.id = rc.request_id
     ${whereClause}
     GROUP BY ur.id, creator.id, assignee.id
     ORDER BY ur.${sort_by} ${sort_order}
@@ -386,7 +386,7 @@ const updateRequest = async (requestId, updateData, updatedBy) => {
 
       await client.query(
         `
-        INSERT INTO request_communications (request_id, sender_id, message_type, message)
+        INSERT INTO bizdev_request_communications (request_id, sender_id, message_type, message)
         VALUES ($1, $2, 'assignment', $3)
       `,
         [requestId, updatedBy, assignmentMessage]
@@ -419,59 +419,69 @@ const updateRequest = async (requestId, updateData, updatedBy) => {
  */
 const updateRequestStatus = async (
   requestId,
-  newStatus,
-  changedBy,
+  status,
+  updatedBy,
   reason = null
 ) => {
   return withTransaction(async (client) => {
-    // Отримуємо поточний запит
-    const currentRequest = await getRequestById(requestId, client);
-    if (!currentRequest) {
-      throw new Error("Запит не знайдено");
+    // Валідуємо параметри перед запитом
+    if (!requestId || !status || !updatedBy) {
+      throw new Error("Відсутні обов'язкові параметри для оновлення статусу");
     }
 
-    const oldStatus = currentRequest.status;
-
-    // Оновлюємо статус
+    // Оновлюємо запит
     const updateQuery = `
       UPDATE bizdev_requests 
-      SET status = $1, 
-          updated_by = $2,
-          completed_at = CASE WHEN $1 = 'completed' THEN NOW() ELSE completed_at END
+      SET 
+        status = $1,
+        updated_at = CURRENT_TIMESTAMP,
+        updated_by = $2
       WHERE id = $3
       RETURNING *
     `;
 
-    await client.query(updateQuery, [newStatus, changedBy, requestId]);
-
-    // Додаємо запис до історії змін статусу
-    const historyQuery = `
-      INSERT INTO bizdev_request_status_history (request_id, old_status, new_status, changed_by, change_reason)
-      VALUES ($1, $2, $3, $4, $5)
-    `;
-
-    await client.query(historyQuery, [
+    const updateResult = await client.query(updateQuery, [
+      status,
+      updatedBy,
       requestId,
-      oldStatus,
-      newStatus,
-      changedBy,
-      reason,
     ]);
 
-    // Додаємо повідомлення про зміну статусу
-    const statusMessage = reason
-      ? `Статус змінено з "${oldStatus}" на "${newStatus}". Причина: ${reason}`
-      : `Статус змінено з "${oldStatus}" на "${newStatus}"`;
+    if (updateResult.rows.length === 0) {
+      await client.query("ROLLBACK");
+      return null;
+    }
 
-    await client.query(
-      `
-      INSERT INTO request_communications (request_id, sender_id, message_type, message)
-      VALUES ($1, $2, 'status_change', $3)
-    `,
-      [requestId, changedBy, statusMessage]
-    );
+    // Додаємо системне повідомлення про зміну статусу
+    const communicationQuery = `
+      INSERT INTO bizdev_request_communications 
+      (request_id, sender_id, message_type, message, is_internal)
+      VALUES ($1::integer, $2::integer, $3::varchar, $4::text, $5::boolean)
+    `;
 
-    return await getRequestById(requestId, client);
+    const statusMessages = {
+      pending: 'Запит переведено в статус "Очікування"',
+      in_progress: "Розпочато роботу над запитом",
+      completed: "Запит успішно завершено",
+      cancelled: "Запит скасовано",
+      on_hold: "Роботу над запитом призупинено",
+    };
+
+    let message = statusMessages[status] || `Статус змінено на "${status}"`;
+    if (reason) {
+      message += `. Причина: ${reason}`;
+    }
+
+    await client.query(communicationQuery, [
+      requestId,
+      updatedBy,
+      "system",
+      message,
+      false,
+    ]);
+
+    await client.query("COMMIT");
+
+    return updateResult.rows[0];
   });
 };
 
