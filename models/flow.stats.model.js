@@ -130,7 +130,11 @@ const bulkUpsertFlowStats = async (statsArray, updated_by) => {
  * @param {number} [options.teamId] - ID команди
  * @param {number} [options.userId] - ID користувача
  * @param {boolean} [options.onlyActive] - Тільки активні потоки
- * @returns {Promise<Array>} Масив потоків зі статистикою
+ * @param {boolean} [options.includeUsers] - Включити інформацію про користувачів
+ * @param {number} [options.page] - Номер сторінки
+ * @param {number} [options.limit] - Кількість елементів на сторінці
+ * @param {number} [options.offset] - Зсув для пагінації
+ * @returns {Promise<Object>} Об'єкт з масивом потоків та загальною кількістю
  */
 const getDailyFlowsStats = async (options = {}) => {
   const { 
@@ -142,154 +146,242 @@ const getDailyFlowsStats = async (options = {}) => {
     status, 
     teamId, 
     userId, 
-    onlyActive 
+    onlyActive = false,
+    includeUsers = false,
+    limit = 20,
+    offset = 0
   } = options;
 
-  // Будуємо умови фільтрації
-  const conditions = [];
-  const params = [year, month, day];
-  let paramIndex = 4;
-
-  // Базові фільтри
-  if (onlyActive) {
-    conditions.push('f.is_active = true');
-  }
-
-  if (status) {
-    conditions.push(`f.status = $${paramIndex++}`);
-    params.push(status);
-  }
-
-  if (teamId) {
-    conditions.push(`f.team_id = $${paramIndex++}`);
-    params.push(teamId);
-  }
-
-  // Фільтр за одним партнером
-  if (partnerId) {
-    conditions.push(`o.partner_id = $${paramIndex++}`);
-    params.push(partnerId);
-  }
-
-  // Фільтр за множинними партнерами
-  if (partnerIds && partnerIds.length > 0) {
-    conditions.push(`o.partner_id = ANY($${paramIndex++})`);
-    params.push(partnerIds);
-  }
-
-  // Фільтр за користувачем (через flow_users)
-  if (userId) {
-    conditions.push(`f.id IN (
-      SELECT DISTINCT fu.flow_id 
-      FROM flow_users fu 
-      WHERE fu.user_id = $${paramIndex++} 
-      AND fu.status = 'active'
-    )`);
-    params.push(userId);
-  }
-
-  const whereClause = conditions.length > 0 ? 
-    `AND ${conditions.join(' AND ')}` : '';
-
-  const query = `
-    SELECT 
-      -- Інформація про потік
-      f.id as flow_id,
-      f.name as flow_name,
-      f.status as flow_status,
-      f.is_active as flow_is_active,
-      f.cpa as flow_cpa,
-      f.currency as flow_currency,
-      f.description as flow_description,
-      f.created_at as flow_created_at,
-      f.team_id,
-      
-      -- Інформація про оффер
-      o.id as offer_id,
-      o.name as offer_name,
-      o.partner_id,
-      
-      -- Інформація про партнера
-      p.id as partner_id,
-      p.name as partner_name,
-      p.type as partner_type,
-      p.is_active as partner_is_active,
-      
-      -- Інформація про команду
-      t.name as team_name,
-      
-      -- Інформація про гео
-      g.id as geo_id,
-      g.name as geo_name,
-      g.country_code as geo_country_code,
-      
-      -- Статистика за день (може бути NULL якщо немає статистики)
-      fs.id as stats_id,
-      fs.spend,
-      fs.installs,
-      fs.regs,
-      fs.deps,
-      fs.verified_deps,
-      fs.cpa as stats_cpa,
-      fs.notes as stats_notes,
-      fs.created_at as stats_created_at,
-      fs.updated_at as stats_updated_at,
-      
-      -- Обчислювані метрики (тільки якщо є статистика)
-      CASE 
-        WHEN fs.id IS NOT NULL AND fs.spend > 0 
-        THEN ROUND(((fs.deps * fs.cpa - fs.spend) / fs.spend * 100)::numeric, 2)
-        ELSE NULL 
-      END as roi,
-      CASE 
-        WHEN fs.id IS NOT NULL AND fs.installs > 0 
-        THEN ROUND((fs.regs::numeric / fs.installs * 100)::numeric, 2)
-        ELSE NULL 
-      END as inst2reg,
-      CASE 
-        WHEN fs.id IS NOT NULL AND fs.regs > 0 
-        THEN ROUND((fs.deps::numeric / fs.regs * 100)::numeric, 2)
-        ELSE NULL 
-      END as reg2dep,
-      
-      -- Прапорець наявності статистики
-      CASE 
-        WHEN fs.id IS NOT NULL THEN true 
-        ELSE false 
-      END as has_stats,
-      
-      -- Кількість активних користувачів потоку
-      (SELECT COUNT(*) 
-       FROM flow_users fu 
-       WHERE fu.flow_id = f.id 
-       AND fu.status = 'active') as active_users_count
-       
-    FROM flows f
-    LEFT JOIN offers o ON f.offer_id = o.id
-    LEFT JOIN partners p ON o.partner_id = p.id
-    LEFT JOIN teams t ON f.team_id = t.id
-    LEFT JOIN geos g ON f.geo_id = g.id
-    LEFT JOIN flow_stats fs ON (
-      f.id = fs.flow_id 
-      AND fs.year = $1 
-      AND fs.month = $2 
-      AND fs.day = $3
-    )
-    WHERE 1=1 ${whereClause}
-    ORDER BY 
-      CASE WHEN fs.id IS NOT NULL THEN 0 ELSE 1 END, -- Потоки зі статистикою спочатку
-      p.name ASC,
-      f.name ASC
-  `;
+  console.log('getDailyFlowsStats викликано з опціями:', options);
 
   try {
-    console.log('Запит денної статистики з параметрами:', { options, params });
+    // Крок 1: Будуємо WHERE умови та параметри
+    const whereConditions = [];
+    const queryParams = [];
+    let paramCounter = 1;
+
+    // Додаткові фільтри
+    if (onlyActive) {
+      whereConditions.push(`f.is_active = $${paramCounter++}`);
+      queryParams.push(true);
+    }
+
+    if (status) {
+      whereConditions.push(`f.status = $${paramCounter++}`);
+      queryParams.push(status);
+    }
+
+    if (teamId) {
+      whereConditions.push(`f.team_id = $${paramCounter++}`);
+      queryParams.push(teamId);
+    }
+
+    if (partnerId) {
+      whereConditions.push(`o.partner_id = $${paramCounter++}`);
+      queryParams.push(partnerId);
+    }
+
+    if (partnerIds && partnerIds.length > 0) {
+      whereConditions.push(`o.partner_id = ANY($${paramCounter++})`);
+      queryParams.push(partnerIds);
+    }
+
+    if (userId) {
+      whereConditions.push(`EXISTS (
+        SELECT 1 FROM flow_users fu 
+        WHERE fu.flow_id = f.id 
+        AND fu.user_id = $${paramCounter++} 
+        AND fu.status = 'active'
+      )`);
+      queryParams.push(userId);
+    }
+
+    const whereClause = whereConditions.length > 0 ? 
+      `AND ${whereConditions.join(' AND ')}` : '';
+
+    console.log('WHERE умови:', { whereConditions, queryParams, whereClause });
+
+    // Крок 2: Запит для підрахунку загальної кількості (БЕЗ статистики)
+    const countQuery = `
+      SELECT COUNT(DISTINCT f.id) as total_count
+      FROM flows f
+      LEFT JOIN offers o ON f.offer_id = o.id
+      LEFT JOIN partners p ON o.partner_id = p.id
+      WHERE 1=1 ${whereClause}
+    `;
+
+    console.log('Count query:', countQuery);
+    console.log('Count params:', queryParams);
+
+    const countResult = await db.query(countQuery, queryParams);
+    const totalCount = parseInt(countResult.rows[0].total_count) || 0;
+
+    console.log('Total count отримано:', totalCount);
+
+    // Крок 3: Основний запит з пагінацією
+    // Додаємо параметри для дати статистики
+    const statsYear = paramCounter++;
+    const statsMonth = paramCounter++;
+    const statsDay = paramCounter++;
+    const limitParam = paramCounter++;
+    const offsetParam = paramCounter++;
     
-    const result = await db.query(query, params);
+    const mainParams = [...queryParams, year, month, day, limit, offset];
+
+    // Будуємо умову для дати статистики в основному запиті
+    const statsDateCondition = `(fs.year = $${statsYear} AND fs.month = $${statsMonth} AND fs.day = $${statsDay})`;
+
+    const mainQuery = `
+      SELECT 
+        -- Основні дані потоку
+        f.id as flow_id,
+        f.name as flow_name,
+        f.status as flow_status,
+        f.is_active as flow_is_active,
+        f.cpa as flow_cpa,
+        f.currency as flow_currency,
+        f.description as flow_description,
+        f.conditions as flow_conditions,
+        f.kpi as flow_kpi,
+        f.created_at as flow_created_at,
+        f.team_id,
+        
+        -- Дані партнера
+        p.id as partner_id,
+        p.name as partner_name,
+        p.type as partner_type,
+        p.is_active as partner_is_active,
+        p.contact_telegram as partner_telegram,
+        p.contact_email as partner_email,
+        
+        -- Дані офферу
+        o.id as offer_id,
+        o.name as offer_name,
+        o.description as offer_description,
+        
+        -- Дані команди
+        t.id as team_id_full,
+        t.name as team_name,
+        
+        -- Дані гео
+        g.id as geo_id,
+        g.name as geo_name,
+        g.country_code as geo_country_code,
+        
+        -- Статистика за день
+        fs.id as stats_id,
+        fs.spend,
+        fs.installs,
+        fs.regs,
+        fs.deps,
+        fs.verified_deps,
+        fs.cpa as stats_cpa,
+        fs.notes as stats_notes,
+        fs.created_at as stats_created_at,
+        fs.updated_at as stats_updated_at,
+        
+        -- Обчислювальні поля
+        CASE 
+          WHEN fs.id IS NOT NULL AND fs.spend > 0 
+          THEN ROUND(((fs.deps * fs.cpa - fs.spend) / fs.spend * 100)::numeric, 2)
+          ELSE NULL 
+        END as roi,
+        CASE 
+          WHEN fs.id IS NOT NULL AND fs.installs > 0 
+          THEN ROUND((fs.regs::numeric / fs.installs * 100)::numeric, 2)
+          ELSE NULL 
+        END as inst2reg,
+        CASE 
+          WHEN fs.id IS NOT NULL AND fs.regs > 0 
+          THEN ROUND((fs.deps::numeric / fs.regs * 100)::numeric, 2)
+          ELSE NULL 
+        END as reg2dep,
+        
+        -- Прапорець наявності статистики
+        CASE WHEN fs.id IS NOT NULL THEN true ELSE false END as has_stats,
+        
+        -- Кількість активних користувачів
+        (SELECT COUNT(*) 
+         FROM flow_users fu 
+         WHERE fu.flow_id = f.id 
+         AND fu.status = 'active') as active_users_count
+         
+      FROM flows f
+      LEFT JOIN offers o ON f.offer_id = o.id
+      LEFT JOIN partners p ON o.partner_id = p.id
+      LEFT JOIN teams t ON f.team_id = t.id
+      LEFT JOIN geos g ON f.geo_id = g.id
+      LEFT JOIN flow_stats fs ON f.id = fs.flow_id AND ${statsDateCondition}
+      WHERE 1=1 ${whereClause}
+      ORDER BY 
+        CASE WHEN fs.id IS NOT NULL THEN 0 ELSE 1 END,
+        p.name ASC,
+        f.name ASC
+      LIMIT $${limitParam} OFFSET $${offsetParam}
+    `;
+
+    console.log('Main query:', mainQuery);
+    console.log('Main params:', mainParams);
+
+    const result = await db.query(mainQuery, mainParams);
+
+    console.log(`Отримано ${result.rows.length} рядків з основного запиту`);
+
+    // Крок 4: Отримуємо користувачів якщо потрібно
+    let usersData = {};
+    if (includeUsers && result.rows.length > 0) {
+      const flowIds = result.rows.map(row => row.flow_id);
+      
+      const usersQuery = `
+        SELECT 
+          fu.flow_id,
+          u.username,
+          u.first_name,
+          u.last_name
+        FROM flow_users fu
+        JOIN users u ON fu.user_id = u.id
+        WHERE fu.flow_id = ANY($1) AND fu.status = 'active'
+        ORDER BY fu.joined_at DESC
+      `;
+
+      console.log('Users query для flow_ids:', flowIds);
+      
+      const usersResult = await db.query(usersQuery, [flowIds]);
+      
+      // Групуємо користувачів за flow_id
+      usersData = usersResult.rows.reduce((acc, user) => {
+        if (!acc[user.flow_id]) {
+          acc[user.flow_id] = [];
+        }
+        acc[user.flow_id].push({
+          id: user.user_id,
+          username: user.username,
+          email: user.email,
+          first_name: user.first_name,
+          last_name: user.last_name,
+          full_name: user.first_name && user.last_name ? 
+            `${user.first_name} ${user.last_name}` : 
+            user.username,
+          role: user.role,
+          is_active: user.user_is_active,
+          avatar_url: user.avatar_url,
+          telegram_username: user.telegram_username,
+          last_login_at: user.last_login_at,
+          flow_participation: {
+            status: user.user_status,
+            notes: user.user_notes,
+            joined_at: user.joined_at,
+            left_at: user.left_at
+          }
+        });
+        return acc;
+      }, {});
+
+      console.log(`Отримано користувачів для ${Object.keys(usersData).length} потоків`);
+    }
     
-    // Форматуємо результат
+    // Крок 5: Форматуємо результат
     const flows = result.rows.map(row => ({
-      // Основна інформація про потік
       flow: {
         id: row.flow_id,
         name: row.flow_name,
@@ -298,39 +390,39 @@ const getDailyFlowsStats = async (options = {}) => {
         cpa: parseFloat(row.flow_cpa) || 0,
         currency: row.flow_currency,
         description: row.flow_description,
+        conditions: row.flow_conditions,
+        kpi: row.flow_kpi,
         created_at: row.flow_created_at,
         team_id: row.team_id,
         active_users_count: parseInt(row.active_users_count) || 0
       },
       
-      // Інформація про партнера
-      partner: {
+      partner: row.partner_id ? {
         id: row.partner_id,
         name: row.partner_name,
         type: row.partner_type,
-        is_active: row.partner_is_active
-      },
+        is_active: row.partner_is_active,
+        contact_telegram: row.partner_telegram,
+        contact_email: row.partner_email
+      } : null,
       
-      // Інформація про оффер
-      offer: {
+      offer: row.offer_id ? {
         id: row.offer_id,
-        name: row.offer_name
-      },
+        name: row.offer_name,
+        description: row.offer_description
+      } : null,
       
-      // Інформація про команду
       team: row.team_id ? {
-        id: row.team_id,
+        id: row.team_id_full,
         name: row.team_name
       } : null,
       
-      // Інформація про гео
       geo: row.geo_id ? {
         id: row.geo_id,
         name: row.geo_name,
         country_code: row.geo_country_code
       } : null,
       
-      // Статистика за день
       stats: row.has_stats ? {
         id: row.stats_id,
         spend: parseFloat(row.spend) || 0,
@@ -340,26 +432,28 @@ const getDailyFlowsStats = async (options = {}) => {
         verified_deps: parseInt(row.verified_deps) || 0,
         cpa: parseFloat(row.stats_cpa) || 0,
         notes: row.stats_notes,
-        
-        // Обчислювані метрики
         roi: row.roi ? parseFloat(row.roi) : 0,
         inst2reg: row.inst2reg ? parseFloat(row.inst2reg) : 0,
         reg2dep: row.reg2dep ? parseFloat(row.reg2dep) : 0,
-        
         created_at: row.stats_created_at,
         updated_at: row.stats_updated_at
       } : null,
       
-      // Прапорець наявності статистики
+      users: includeUsers ? (usersData[row.flow_id] || []) : undefined,
       has_stats: row.has_stats
     }));
 
-    console.log(`Знайдено ${flows.length} потоків за ${year}-${month}-${day}`);
-    return flows;
+    console.log(`Повертаємо ${flows.length} потоків з ${totalCount} загальних`);
+    
+    return {
+      flows,
+      totalCount
+    };
     
   } catch (error) {
-    console.error('Помилка при отриманні денної статистики потоків:', error);
-    throw new Error('Помилка бази даних при отриманні денної статистики потоків');
+    console.error('Помилка в getDailyFlowsStats:', error);
+    console.error('Stack trace:', error.stack);
+    throw new Error(`Помилка бази даних: ${error.message}`);
   }
 };
 

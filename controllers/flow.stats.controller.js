@@ -160,6 +160,11 @@ const getDailyFlowsStats = async (req, res) => {
       });
     }
 
+    // Параметри пагінації
+    const page = parseInt(req.query.page) || 1;
+    const limit = parseInt(req.query.limit) || 20;
+    const offset = (page - 1) * limit;
+
     const options = {
       year,
       month,
@@ -176,11 +181,22 @@ const getDailyFlowsStats = async (req, res) => {
       teamId: req.query.teamId ? parseInt(req.query.teamId) : undefined,
       userId: req.query.userId ? parseInt(req.query.userId) : undefined,
       onlyActive: req.query.onlyActive === "true",
+      includeUsers: true,
+      // Пагінація
+      page,
+      limit,
+      offset,
     };
 
     console.log("Запит статистики потоків за день:", options);
 
-    const flows = await flowStatsModel.getDailyFlowsStats(options);
+    const result = await flowStatsModel.getDailyFlowsStats(options);
+    const { flows, totalCount } = result;
+
+    // Розрахунок метаданих пагінації
+    const totalPages = Math.ceil(totalCount / limit);
+    const hasNextPage = page < totalPages;
+    const hasPrevPage = page > 1;
 
     res.json({
       success: true,
@@ -193,9 +209,22 @@ const getDailyFlowsStats = async (req, res) => {
             .toString()
             .padStart(2, "0")}`,
         },
-        total_flows: flows.length,
-        flows_with_stats: flows.filter((flow) => flow.has_stats).length,
-        flows_without_stats: flows.filter((flow) => !flow.has_stats).length,
+        pagination: {
+          currentPage: page,
+          totalPages,
+          totalItems: totalCount,
+          itemsPerPage: limit,
+          hasNextPage,
+          hasPrevPage,
+          nextPage: hasNextPage ? page + 1 : null,
+          prevPage: hasPrevPage ? page - 1 : null,
+        },
+        summary: {
+          total_flows: totalCount,
+          flows_with_stats: flows.filter((flow) => flow.has_stats).length,
+          flows_without_stats: flows.filter((flow) => !flow.has_stats).length,
+          current_page_flows: flows.length,
+        },
         filters: {
           partnerId: options.partnerId,
           partnerIds: options.partnerIds,
@@ -203,6 +232,7 @@ const getDailyFlowsStats = async (req, res) => {
           teamId: options.teamId,
           userId: options.userId,
           onlyActive: options.onlyActive,
+          includeUsers: options.includeUsers,
         },
         flows,
       },
@@ -467,5 +497,5 @@ module.exports = {
   getAggregatedStats,
   deleteFlowStat,
   getMonthlyCalendarStats,
-  getDailyFlowsStats
+  getDailyFlowsStats,
 };

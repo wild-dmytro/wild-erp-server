@@ -30,7 +30,7 @@ router.post('/bulk', flowStatsController.bulkUpsertFlowStats);
 /**
  * Отримання всіх потоків зі статистикою за певний день з фільтрацією за партнерами
  * GET /api/flow-stats/daily/:year/:month/:day
- * Query params: partnerId, partnerIds[], status, teamId, userId
+ * Query params: partnerId, partnerIds[], status, teamId, userId, page, limit, includeUsers
  */
 router.get('/daily/:year/:month/:day', [
   check('year', 'Рік має бути числом між 2020 та 2030')
@@ -64,6 +64,15 @@ router.get('/daily/:year/:month/:day', [
     .optional()
     .isInt(),
   check('onlyActive', 'onlyActive має бути булевим значенням')
+    .optional()
+    .isBoolean(),
+  check('page', 'Номер сторінки має бути числом більше 0')
+    .optional()
+    .isInt({ min: 1 }),
+  check('limit', 'Ліміт має бути числом від 1 до 100')
+    .optional()
+    .isInt({ min: 1, max: 100 }),
+  check('includeUsers', 'includeUsers має бути булевим значенням')
     .optional()
     .isBoolean()
 ], flowStatsController.getDailyFlowsStats);
