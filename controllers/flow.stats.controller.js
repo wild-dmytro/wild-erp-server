@@ -1,4 +1,4 @@
-const flowStatsModel = require('../models/flow.stats.model');
+const flowStatsModel = require("../models/flow.stats.model");
 
 /**
  * Створення або оновлення статистики за день
@@ -17,23 +17,26 @@ const upsertFlowStat = async (req, res) => {
       deps,
       verified_deps,
       cpa,
-      notes
+      notes,
     } = req.body;
 
     // Валідація обов'язкових полів
     if (!flow_id || !day || !month || !year) {
       return res.status(400).json({
         success: false,
-        message: 'Обов\'язкові поля: flow_id, day, month, year'
+        message: "Обов'язкові поля: flow_id, day, month, year",
       });
     }
 
     // Перевірка доступу користувача до потоку
-    const hasAccess = await flowStatsModel.checkUserAccess(flow_id, req.user.id);
+    const hasAccess = await flowStatsModel.checkUserAccess(
+      flow_id,
+      req.user.id
+    );
     if (!hasAccess) {
       return res.status(403).json({
         success: false,
-        message: 'Немає доступу до цього потоку'
+        message: "Немає доступу до цього потоку",
       });
     }
 
@@ -49,23 +52,22 @@ const upsertFlowStat = async (req, res) => {
       verified_deps,
       cpa,
       notes,
-      updated_by: req.user.id
+      updated_by: req.user.id,
     };
 
     const result = await flowStatsModel.upsertFlowStat(statData);
 
     res.status(201).json({
       success: true,
-      message: 'Статистика успішно збережена',
-      data: result
+      message: "Статистика успішно збережена",
+      data: result,
     });
-
   } catch (error) {
-    console.error('Помилка при збереженні статистики:', error);
+    console.error("Помилка при збереженні статистики:", error);
     res.status(500).json({
       success: false,
-      message: 'Внутрішня помилка сервера',
-      error: process.env.NODE_ENV === 'development' ? error.message : undefined
+      message: "Внутрішня помилка сервера",
+      error: process.env.NODE_ENV === "development" ? error.message : undefined,
     });
   }
 };
@@ -82,39 +84,135 @@ const bulkUpsertFlowStats = async (req, res) => {
     if (!flow_id || !Array.isArray(stats) || stats.length === 0) {
       return res.status(400).json({
         success: false,
-        message: 'Потрібні flow_id та масив stats'
+        message: "Потрібні flow_id та масив stats",
       });
     }
 
     // Перевірка доступу
-    const hasAccess = await flowStatsModel.checkUserAccess(flow_id, req.user.id);
+    const hasAccess = await flowStatsModel.checkUserAccess(
+      flow_id,
+      req.user.id
+    );
     if (!hasAccess) {
       return res.status(403).json({
         success: false,
-        message: 'Немає доступу до цього потоку'
+        message: "Немає доступу до цього потоку",
       });
     }
 
     // Додаємо flow_id до кожного елемента статистики
-    const statsWithFlowId = stats.map(stat => ({
+    const statsWithFlowId = stats.map((stat) => ({
       ...stat,
-      flow_id
+      flow_id,
     }));
 
-    const results = await flowStatsModel.bulkUpsertFlowStats(statsWithFlowId, req.user.id);
+    const results = await flowStatsModel.bulkUpsertFlowStats(
+      statsWithFlowId,
+      req.user.id
+    );
 
     res.status(201).json({
       success: true,
       message: `Успішно оновлено ${results.length} записів`,
-      data: results
+      data: results,
     });
-
   } catch (error) {
-    console.error('Помилка при масовому оновленні статистики:', error);
+    console.error("Помилка при масовому оновленні статистики:", error);
     res.status(500).json({
       success: false,
-      message: 'Внутрішня помилка сервера',
-      error: process.env.NODE_ENV === 'development' ? error.message : undefined
+      message: "Внутрішня помилка сервера",
+      error: process.env.NODE_ENV === "development" ? error.message : undefined,
+    });
+  }
+};
+
+/**
+ * Отримання всіх потоків зі статистикою за певний день
+ * GET /api/flow-stats/daily/:year/:month/:day
+ */
+const getDailyFlowsStats = async (req, res) => {
+  try {
+    const { validationResult } = require("express-validator");
+    const errors = validationResult(req);
+
+    if (!errors.isEmpty()) {
+      return res.status(400).json({
+        success: false,
+        message: "Помилки валідації",
+        errors: errors.array(),
+      });
+    }
+
+    const year = parseInt(req.params.year);
+    const month = parseInt(req.params.month);
+    const day = parseInt(req.params.day);
+
+    // Валідація дати
+    const targetDate = new Date(year, month - 1, day);
+    if (
+      targetDate.getFullYear() !== year ||
+      targetDate.getMonth() !== month - 1 ||
+      targetDate.getDate() !== day
+    ) {
+      return res.status(400).json({
+        success: false,
+        message: "Недійсна дата",
+      });
+    }
+
+    const options = {
+      year,
+      month,
+      day,
+      partnerId: req.query.partnerId
+        ? parseInt(req.query.partnerId)
+        : undefined,
+      partnerIds: req.query.partnerIds
+        ? typeof req.query.partnerIds === "string"
+          ? req.query.partnerIds.split(",").map((id) => parseInt(id.trim()))
+          : req.query.partnerIds.map((id) => parseInt(id))
+        : undefined,
+      status: req.query.status,
+      teamId: req.query.teamId ? parseInt(req.query.teamId) : undefined,
+      userId: req.query.userId ? parseInt(req.query.userId) : undefined,
+      onlyActive: req.query.onlyActive === "true",
+    };
+
+    console.log("Запит статистики потоків за день:", options);
+
+    const flows = await flowStatsModel.getDailyFlowsStats(options);
+
+    res.json({
+      success: true,
+      data: {
+        date: {
+          year,
+          month,
+          day,
+          formatted: `${year}-${month.toString().padStart(2, "0")}-${day
+            .toString()
+            .padStart(2, "0")}`,
+        },
+        total_flows: flows.length,
+        flows_with_stats: flows.filter((flow) => flow.has_stats).length,
+        flows_without_stats: flows.filter((flow) => !flow.has_stats).length,
+        filters: {
+          partnerId: options.partnerId,
+          partnerIds: options.partnerIds,
+          status: options.status,
+          teamId: options.teamId,
+          userId: options.userId,
+          onlyActive: options.onlyActive,
+        },
+        flows,
+      },
+    });
+  } catch (error) {
+    console.error("Помилка при отриманні денної статистики потоків:", error);
+    res.status(500).json({
+      success: false,
+      message: "Внутрішня помилка сервера",
+      error: process.env.NODE_ENV === "development" ? error.message : undefined,
     });
   }
 };
@@ -130,16 +228,19 @@ const getFlowStats = async (req, res) => {
     if (isNaN(flow_id)) {
       return res.status(400).json({
         success: false,
-        message: 'Недійсний ID потоку'
+        message: "Недійсний ID потоку",
       });
     }
 
     // Перевірка доступу
-    const hasAccess = await flowStatsModel.checkUserAccess(flow_id, req.user.id);
+    const hasAccess = await flowStatsModel.checkUserAccess(
+      flow_id,
+      req.user.id
+    );
     if (!hasAccess) {
       return res.status(403).json({
         success: false,
-        message: 'Немає доступу до цього потоку'
+        message: "Немає доступу до цього потоку",
       });
     }
 
@@ -147,22 +248,21 @@ const getFlowStats = async (req, res) => {
       month: req.query.month ? parseInt(req.query.month) : undefined,
       year: req.query.year ? parseInt(req.query.year) : undefined,
       dateFrom: req.query.dateFrom,
-      dateTo: req.query.dateTo
+      dateTo: req.query.dateTo,
     };
 
     const stats = await flowStatsModel.getFlowStats(flow_id, options);
 
     res.json({
       success: true,
-      data: stats
+      data: stats,
     });
-
   } catch (error) {
-    console.error('Помилка при отриманні статистики:', error);
+    console.error("Помилка при отриманні статистики:", error);
     res.status(500).json({
       success: false,
-      message: 'Внутрішня помилка сервера',
-      error: process.env.NODE_ENV === 'development' ? error.message : undefined
+      message: "Внутрішня помилка сервера",
+      error: process.env.NODE_ENV === "development" ? error.message : undefined,
     });
   }
 };
@@ -178,16 +278,19 @@ const getAggregatedStats = async (req, res) => {
     if (isNaN(flow_id)) {
       return res.status(400).json({
         success: false,
-        message: 'Недійсний ID потоку'
+        message: "Недійсний ID потоку",
       });
     }
 
     // Перевірка доступу
-    const hasAccess = await flowStatsModel.checkUserAccess(flow_id, req.user.id);
+    const hasAccess = await flowStatsModel.checkUserAccess(
+      flow_id,
+      req.user.id
+    );
     if (!hasAccess) {
       return res.status(403).json({
         success: false,
-        message: 'Немає доступу до цього потоку'
+        message: "Немає доступу до цього потоку",
       });
     }
 
@@ -195,22 +298,24 @@ const getAggregatedStats = async (req, res) => {
       month: req.query.month ? parseInt(req.query.month) : undefined,
       year: req.query.year ? parseInt(req.query.year) : undefined,
       dateFrom: req.query.dateFrom,
-      dateTo: req.query.dateTo
+      dateTo: req.query.dateTo,
     };
 
-    const aggregatedStats = await flowStatsModel.getAggregatedStats(flow_id, options);
+    const aggregatedStats = await flowStatsModel.getAggregatedStats(
+      flow_id,
+      options
+    );
 
     res.json({
       success: true,
-      data: aggregatedStats
+      data: aggregatedStats,
     });
-
   } catch (error) {
-    console.error('Помилка при отриманні агрегованої статистики:', error);
+    console.error("Помилка при отриманні агрегованої статистики:", error);
     res.status(500).json({
       success: false,
-      message: 'Внутрішня помилка сервера',
-      error: process.env.NODE_ENV === 'development' ? error.message : undefined
+      message: "Внутрішня помилка сервера",
+      error: process.env.NODE_ENV === "development" ? error.message : undefined,
     });
   }
 };
@@ -229,39 +334,46 @@ const deleteFlowStat = async (req, res) => {
     if (isNaN(flow_id) || isNaN(year) || isNaN(month) || isNaN(day)) {
       return res.status(400).json({
         success: false,
-        message: 'Недійсні параметри'
+        message: "Недійсні параметри",
       });
     }
 
     // Перевірка доступу
-    const hasAccess = await flowStatsModel.checkUserAccess(flow_id, req.user.id);
+    const hasAccess = await flowStatsModel.checkUserAccess(
+      flow_id,
+      req.user.id
+    );
     if (!hasAccess) {
       return res.status(403).json({
         success: false,
-        message: 'Немає доступу до цього потоку'
+        message: "Немає доступу до цього потоку",
       });
     }
 
-    const deleted = await flowStatsModel.deleteFlowStat(flow_id, day, month, year);
+    const deleted = await flowStatsModel.deleteFlowStat(
+      flow_id,
+      day,
+      month,
+      year
+    );
 
     if (deleted) {
       res.json({
         success: true,
-        message: 'Статистика успішно видалена'
+        message: "Статистика успішно видалена",
       });
     } else {
       res.status(404).json({
         success: false,
-        message: 'Запис не знайдено'
+        message: "Запис не знайдено",
       });
     }
-
   } catch (error) {
-    console.error('Помилка при видаленні статистики:', error);
+    console.error("Помилка при видаленні статистики:", error);
     res.status(500).json({
       success: false,
-      message: 'Внутрішня помилка сервера',
-      error: process.env.NODE_ENV === 'development' ? error.message : undefined
+      message: "Внутрішня помилка сервера",
+      error: process.env.NODE_ENV === "development" ? error.message : undefined,
     });
   }
 };
@@ -279,16 +391,19 @@ const getMonthlyCalendarStats = async (req, res) => {
     if (isNaN(flow_id) || isNaN(year) || isNaN(month)) {
       return res.status(400).json({
         success: false,
-        message: 'Недійсні параметри'
+        message: "Недійсні параметри",
       });
     }
 
     // Перевірка доступу
-    const hasAccess = await flowStatsModel.checkUserAccess(flow_id, req.user.id);
+    const hasAccess = await flowStatsModel.checkUserAccess(
+      flow_id,
+      req.user.id
+    );
     if (!hasAccess) {
       return res.status(403).json({
         success: false,
-        message: 'Немає доступу до цього потоку'
+        message: "Немає доступу до цього потоку",
       });
     }
 
@@ -314,15 +429,15 @@ const getMonthlyCalendarStats = async (req, res) => {
         inst2reg: 0,
         reg2dep: 0,
         notes: null,
-        hasData: false
+        hasData: false,
       };
     }
 
     // Заповнюємо данимі з бази
-    stats.forEach(stat => {
+    stats.forEach((stat) => {
       calendar[stat.day] = {
         ...stat,
-        hasData: true
+        hasData: true,
       };
     });
 
@@ -332,16 +447,15 @@ const getMonthlyCalendarStats = async (req, res) => {
         flow_id,
         year,
         month,
-        calendar: Object.values(calendar)
-      }
+        calendar: Object.values(calendar),
+      },
     });
-
   } catch (error) {
-    console.error('Помилка при отриманні календарної статистики:', error);
+    console.error("Помилка при отриманні календарної статистики:", error);
     res.status(500).json({
       success: false,
-      message: 'Внутрішня помилка сервера',
-      error: process.env.NODE_ENV === 'development' ? error.message : undefined
+      message: "Внутрішня помилка сервера",
+      error: process.env.NODE_ENV === "development" ? error.message : undefined,
     });
   }
 };
@@ -352,5 +466,6 @@ module.exports = {
   getFlowStats,
   getAggregatedStats,
   deleteFlowStat,
-  getMonthlyCalendarStats
+  getMonthlyCalendarStats,
+  getDailyFlowsStats
 };
