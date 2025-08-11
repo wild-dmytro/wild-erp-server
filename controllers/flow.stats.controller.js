@@ -298,6 +298,402 @@ const getFlowStats = async (req, res) => {
 };
 
 /**
+ * Отримання статистики користувача за місяць по днях
+ * GET /api/flow-stats/user/:userId/monthly/:year/:month
+ */
+const getUserMonthlyStats = async (req, res) => {
+  try {
+    const userId = parseInt(req.params.userId);
+    const month = parseInt(req.params.month);
+    const year = parseInt(req.params.year);
+
+    // Валідація параметрів
+    if (isNaN(userId) || userId <= 0) {
+      return res.status(400).json({
+        success: false,
+        message: "Недійсний ID користувача",
+      });
+    }
+
+    if (isNaN(month) || month < 1 || month > 12) {
+      return res.status(400).json({
+        success: false,
+        message: "Недійсний місяць. Має бути від 1 до 12",
+      });
+    }
+
+    if (isNaN(year) || year < 2020 || year > 2030) {
+      return res.status(400).json({
+        success: false,
+        message: "Недійсний рік. Має бути від 2020 до 2030",
+      });
+    }
+
+    // Перевіряємо права доступу
+    const requestingUserId = req.user.id;
+    const userRole = req.user.role;
+
+    // Дозволяємо тільки адмінам, тімлідам або самому користувачу переглядати статистику
+    if (
+      userRole !== "admin" &&
+      userRole !== "teamlead" &&
+      requestingUserId !== userId
+    ) {
+      return res.status(403).json({
+        success: false,
+        message: "Недостатньо прав для перегляду статистики цього користувача",
+      });
+    }
+
+    const stats = await flowStatsModel.getUserMonthlyStats(userId, {
+      month,
+      year,
+    });
+
+    res.json({
+      success: true,
+      data: stats,
+      meta: {
+        request_time: new Date().toISOString(),
+        period: `${year}-${String(month).padStart(2, "0")}`,
+        user_id: userId,
+      },
+    });
+  } catch (error) {
+    console.error("Помилка отримання статистики користувача:", error);
+
+    // Обробка специфічних помилок
+    if (error.message.includes("Місяць та рік є обов'язковими")) {
+      return res.status(400).json({
+        success: false,
+        message: error.message,
+      });
+    }
+
+    res.status(500).json({
+      success: false,
+      message: "Внутрішня помилка сервера при отриманні статистики користувача",
+      error: process.env.NODE_ENV === "development" ? error.message : undefined,
+    });
+  }
+};
+
+/**
+ * Отримання статистики команди за місяць по днях
+ * GET /api/flow-stats/team/:teamId/monthly/:year/:month
+ */
+const getTeamMonthlyStats = async (req, res) => {
+  try {
+    const teamId = parseInt(req.params.teamId);
+    const month = parseInt(req.params.month);
+    const year = parseInt(req.params.year);
+
+    // Валідація параметрів
+    if (isNaN(teamId) || teamId <= 0) {
+      return res.status(400).json({
+        success: false,
+        message: "Недійсний ID команди",
+      });
+    }
+
+    if (isNaN(month) || month < 1 || month > 12) {
+      return res.status(400).json({
+        success: false,
+        message: "Недійсний місяць. Має бути від 1 до 12",
+      });
+    }
+
+    if (isNaN(year) || year < 2020 || year > 2030) {
+      return res.status(400).json({
+        success: false,
+        message: "Недійсний рік. Має бути від 2020 до 2030",
+      });
+    }
+
+    // Перевіряємо права доступу
+    const userRole = req.user.role;
+    const userId = req.user.id;
+
+    // Дозволяємо адмінам та тімлідам переглядати статистику будь-якої команди
+    // Для інших користувачів перевіряємо, чи вони належать до цієї команди
+    if (userRole !== "admin" && userRole !== "teamlead") {
+      // Тут можна додати перевірку приналежності користувача до команди
+      // const userTeam = await getUserTeam(userId);
+      // if (userTeam.id !== teamId) {
+      //   return res.status(403).json({
+      //     success: false,
+      //     message: 'Недостатньо прав для перегляду статистики цієї команди'
+      //   });
+      // }
+    }
+
+    const stats = await flowStatsModel.getTeamMonthlyStats(teamId, {
+      month,
+      year,
+    });
+
+    res.json({
+      success: true,
+      data: stats,
+      meta: {
+        request_time: new Date().toISOString(),
+        period: `${year}-${String(month).padStart(2, "0")}`,
+        team_id: teamId,
+      },
+    });
+  } catch (error) {
+    console.error("Помилка отримання статистики команди:", error);
+
+    // Обробка специфічних помилок
+    if (error.message.includes("Місяць та рік є обов'язковими")) {
+      return res.status(400).json({
+        success: false,
+        message: error.message,
+      });
+    }
+
+    if (error.message.includes("Команду не знайдено")) {
+      return res.status(404).json({
+        success: false,
+        message: "Команду не знайдено",
+      });
+    }
+
+    res.status(500).json({
+      success: false,
+      message: "Внутрішня помилка сервера при отриманні статистики команди",
+      error: process.env.NODE_ENV === "development" ? error.message : undefined,
+    });
+  }
+};
+
+/**
+ * Отримання всіх потоків із агрегованою статистикою за місяць для користувача
+ * GET /api/flow-stats/user/:userId/flows/monthly/:year/:month
+ */
+const getUserFlowsMonthlyStats = async (req, res) => {
+  try {
+    const userId = parseInt(req.params.userId);
+    const month = parseInt(req.params.month);
+    const year = parseInt(req.params.year);
+
+    // Валідація параметрів
+    if (isNaN(userId) || userId <= 0) {
+      return res.status(400).json({
+        success: false,
+        message: "Недійсний ID користувача",
+      });
+    }
+
+    if (isNaN(month) || month < 1 || month > 12) {
+      return res.status(400).json({
+        success: false,
+        message: "Недійсний місяць. Має бути від 1 до 12",
+      });
+    }
+
+    if (isNaN(year) || year < 2020 || year > 2030) {
+      return res.status(400).json({
+        success: false,
+        message: "Недійсний рік. Має бути від 2020 до 2030",
+      });
+    }
+
+    // Перевіряємо права доступу
+    const requestingUserId = req.user.id;
+    const userRole = req.user.role;
+
+    if (
+      userRole !== "admin" &&
+      userRole !== "teamlead" &&
+      requestingUserId !== userId
+    ) {
+      return res.status(403).json({
+        success: false,
+        message: "Недостатньо прав для перегляду потоків цього користувача",
+      });
+    }
+
+    const stats = await flowStatsModel.getUserFlowsMonthlyStats(userId, {
+      month,
+      year,
+    });
+
+    res.json({
+      success: true,
+      data: stats,
+      meta: {
+        request_time: new Date().toISOString(),
+        period: `${year}-${String(month).padStart(2, "0")}`,
+        user_id: userId,
+        flows_count: stats.flows.length,
+      },
+    });
+  } catch (error) {
+    console.error("Помилка отримання потоків користувача:", error);
+
+    if (error.message.includes("Місяць та рік є обов'язковими")) {
+      return res.status(400).json({
+        success: false,
+        message: error.message,
+      });
+    }
+
+    res.status(500).json({
+      success: false,
+      message: "Внутрішня помилка сервера при отриманні потоків користувача",
+      error: process.env.NODE_ENV === "development" ? error.message : undefined,
+    });
+  }
+};
+
+/**
+ * Отримання всіх потоків із агрегованою статистикою за місяць для команди
+ * GET /api/flow-stats/team/:teamId/flows/monthly/:year/:month
+ */
+const getTeamFlowsMonthlyStats = async (req, res) => {
+  try {
+    const teamId = parseInt(req.params.teamId);
+    const month = parseInt(req.params.month);
+    const year = parseInt(req.params.year);
+
+    // Валідація параметрів
+    if (isNaN(teamId) || teamId <= 0) {
+      return res.status(400).json({
+        success: false,
+        message: "Недійсний ID команди",
+      });
+    }
+
+    if (isNaN(month) || month < 1 || month > 12) {
+      return res.status(400).json({
+        success: false,
+        message: "Недійсний місяць. Має бути від 1 до 12",
+      });
+    }
+
+    if (isNaN(year) || year < 2020 || year > 2030) {
+      return res.status(400).json({
+        success: false,
+        message: "Недійсний рік. Має бути від 2020 до 2030",
+      });
+    }
+
+    // Перевіряємо права доступу
+    const userRole = req.user.role;
+
+    if (userRole !== "admin" && userRole !== "teamlead") {
+      return res.status(403).json({
+        success: false,
+        message: "Недостатньо прав для перегляду потоків команди",
+      });
+    }
+
+    const stats = await flowStatsModel.getTeamFlowsMonthlyStats(teamId, {
+      month,
+      year,
+    });
+
+    res.json({
+      success: true,
+      data: stats,
+      meta: {
+        request_time: new Date().toISOString(),
+        period: `${year}-${String(month).padStart(2, "0")}`,
+        team_id: teamId,
+        flows_count: stats.flows.length,
+      },
+    });
+  } catch (error) {
+    console.error("Помилка отримання потоків команди:", error);
+
+    if (error.message.includes("Місяць та рік є обов'язковими")) {
+      return res.status(400).json({
+        success: false,
+        message: error.message,
+      });
+    }
+
+    if (error.message.includes("Команду не знайдено")) {
+      return res.status(404).json({
+        success: false,
+        message: "Команду не знайдено",
+      });
+    }
+
+    res.status(500).json({
+      success: false,
+      message: "Внутрішня помилка сервера при отриманні потоків команди",
+      error: process.env.NODE_ENV === "development" ? error.message : undefined,
+    });
+  }
+};
+
+/**
+ * Отримання загальної статистики компанії за місяць (P/L)
+ * GET /api/flow-stats/company/monthly/:year/:month
+ */
+const getCompanyMonthlyStats = async (req, res) => {
+  try {
+    const month = parseInt(req.params.month);
+    const year = parseInt(req.params.year);
+
+    // Валідація параметрів
+    if (isNaN(month) || month < 1 || month > 12) {
+      return res.status(400).json({
+        success: false,
+        message: "Недійсний місяць. Має бути від 1 до 12",
+      });
+    }
+
+    if (isNaN(year) || year < 2020 || year > 2030) {
+      return res.status(400).json({
+        success: false,
+        message: "Недійсний рік. Має бути від 2020 до 2030",
+      });
+    }
+
+    // Тільки адміни можуть переглядати загальну статистику компанії
+    const userRole = req.user.role;
+    if (userRole !== "admin") {
+      return res.status(403).json({
+        success: false,
+        message:
+          "Тільки адміністратори можуть переглядати загальну статистику компанії",
+      });
+    }
+
+    const stats = await flowStatsModel.getCompanyMonthlyStats({ month, year });
+
+    res.json({
+      success: true,
+      data: stats,
+      meta: {
+        request_time: new Date().toISOString(),
+        period: `${year}-${String(month).padStart(2, "0")}`,
+        data_type: "company_pnl",
+        requester: req.user.username || req.user.id,
+      },
+    });
+  } catch (error) {
+    console.error("Помилка отримання статистики компанії:", error);
+
+    if (error.message.includes("Місяць та рік є обов'язковими")) {
+      return res.status(400).json({
+        success: false,
+        message: error.message,
+      });
+    }
+
+    res.status(500).json({
+      success: false,
+      message: "Внутрішня помилка сервера при отриманні статистики компанії",
+      error: process.env.NODE_ENV === "development" ? error.message : undefined,
+    });
+  }
+};
+
+/**
  * Отримання агрегованої статистики
  * GET /api/flow-stats/:flow_id/aggregated
  */
@@ -494,8 +890,13 @@ module.exports = {
   upsertFlowStat,
   bulkUpsertFlowStats,
   getFlowStats,
+  getUserMonthlyStats,
+  getTeamMonthlyStats,
   getAggregatedStats,
   deleteFlowStat,
   getMonthlyCalendarStats,
   getDailyFlowsStats,
+  getUserFlowsMonthlyStats,
+  getTeamFlowsMonthlyStats,
+  getCompanyMonthlyStats,
 };
