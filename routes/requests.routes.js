@@ -13,7 +13,11 @@ router.use(authMiddleware);
  * @desc    Отримання списку всіх заявок з фільтрацією та пагінацією
  * @access  Private
  */
-router.get("/", requestsController.getAllRequests);
+router.get(
+  "/",
+  roleMiddleware("admin", "finance_manager", "teamlead", "buyer"),
+  requestsController.getAllRequests
+);
 
 /**
  * @route   GET /api/requests/expenses

@@ -1,49 +1,5 @@
 const db = require("../config/db");
 
-/**
- * Отримує статистику заявок за статусами
- * @param {Object} options - Опції для фільтрації
- * @param {Date} [options.startDate] - Початкова дата для фільтрації
- * @param {Date} [options.endDate] - Кінцева дата для фільтрації
- * @returns {Promise<Array>} Масив об'єктів з кількістю заявок за статусами
- */
-const getRequestStatusStats = async ({ startDate, endDate } = {}) => {
-  const conditions = ["TRUE"];
-  const params = [];
-  let paramIndex = 1;
-
-  if (startDate) {
-    conditions.push(`created_at >= $${paramIndex++}`);
-    params.push(startDate);
-  }
-
-  if (endDate) {
-    conditions.push(`created_at <= $${paramIndex++}`);
-    params.push(endDate);
-  }
-
-  const whereClause = conditions.join(" AND ");
-
-  const result = await db.query(
-    `
-    SELECT 
-      status,
-      COUNT(*) as count
-    FROM 
-      requests
-    WHERE 
-      ${whereClause}
-    GROUP BY 
-      status
-    ORDER BY 
-      count DESC
-  `,
-    params
-  );
-
-  return result.rows;
-};
-
 const getRequestTypeSummary = async ({ startDate, endDate, teamId }) => {
   const conditions = ["r.status IN ('approved_by_finance', 'completed')"];
   const params = [];
@@ -80,90 +36,6 @@ const getRequestTypeSummary = async ({ startDate, endDate, teamId }) => {
     JOIN users u ON r.user_id = u.id
     ${whereClause}
     GROUP BY r.request_type
-  `;
-
-  const result = await db.query(query, params);
-
-  return result.rows;
-};
-
-/**
- * Отримує тренд запитів з часом
- * @param {Object} options - Опції для фільтрації та групування
- * @param {string} [options.interval='day'] - Інтервал групування (day, week, month)
- * @param {string} [options.requestType] - Тип запиту (agent_refill, expenses)
- * @param {Date} [options.startDate] - Початкова дата для фільтрації
- * @param {Date} [options.endDate] - Кінцева дата для фільтрації
- * @param {number} [options.teamId] - ID команди для фільтрації
- * @returns {Promise<Array>} Масив даних для тренду
- */
-const getRequestsTrend = async ({
-  interval = "day",
-  requestType,
-  startDate,
-  endDate,
-  teamId,
-}) => {
-  // Визначення формату для групування по часу
-  let timeFormat;
-  switch (interval) {
-    case "week":
-      timeFormat = "date_trunc('week', r.created_at)";
-      break;
-    case "month":
-      timeFormat = "date_trunc('month', r.created_at)";
-      break;
-    default:
-      timeFormat = "date_trunc('day', r.created_at)";
-  }
-
-  // Побудова WHERE умов
-  const conditions = ["TRUE"];
-  const params = [];
-  let paramIndex = 1;
-
-  if (requestType) {
-    conditions.push(`r.request_type = $${paramIndex++}`);
-    params.push(requestType);
-  }
-
-  if (startDate) {
-    conditions.push(`r.created_at >= $${paramIndex++}`);
-    params.push(startDate.toISOString());
-  }
-
-  if (endDate) {
-    conditions.push(`r.created_at <= $${paramIndex++}`);
-    const newEndDate = new Date(endDate);
-    console.log(newEndDate);
-    newEndDate.setDate(newEndDate.getDate() + 1);
-    console.log(newEndDate);
-    params.push(newEndDate.toISOString());
-  }
-
-  if (teamId) {
-    conditions.push(`u.team_id = $${paramIndex++}`);
-    params.push(teamId);
-  }
-
-  const whereClause = conditions.join(" AND ");
-
-  // Виконання запиту
-  const query = `
-    SELECT 
-      ${timeFormat} as time_period,
-      r.status,
-      COUNT(*) as count
-    FROM 
-      requests r
-    JOIN 
-      users u ON r.user_id = u.id
-    WHERE 
-      ${whereClause}
-    GROUP BY 
-      time_period, r.status
-    ORDER BY 
-      time_period
   `;
 
   const result = await db.query(query, params);
@@ -651,50 +523,158 @@ const getFinanceManagerStats = async ({ startDate, endDate, teamId }) => {
 };
 
 /**
- * Отримує кількість заявок за періодами
+ * Отримує статистику витрат за відділами
  * @param {Object} options - Опції для фільтрації
- * @param {string} [options.period='day'] - Період для групування (day, week, month)
- * @param {number} [options.last=7] - Кількість останніх періодів
- * @returns {Promise<Array>} Масив даних з кількістю заявок за періодами
+ * @param {Date} [options.startDate] - Початкова дата для фільтрації
+ * @param {Date} [options.endDate] - Кінцева дата для фільтрації
+ * @returns {Promise<Array>} Масив об'єктів статистики за відділами
  */
-const getRequestsCountByPeriod = async ({ period = "day", last = 7 }) => {
-  let dateFormat;
-  let interval;
+const getDepartmentExpenseStats = async ({ startDate, endDate } = {}) => {
+  // Побудова базових умов для requests
+  const requestConditions = [
+    "r.status IN ('approved_by_finance', 'completed')",
+  ];
+  // Окремі умови для таблиці salaries
+  const salaryConditions = ["s.status = 'paid'"];
 
-  // Визначення формату для групування та інтервалу
-  switch (period) {
-    case "week":
-      dateFormat = "to_char(date_trunc('week', created_at), 'YYYY-MM-DD')";
-      interval = `${last} weeks`;
-      break;
-    case "month":
-      dateFormat = "to_char(date_trunc('month', created_at), 'YYYY-MM')";
-      interval = `${last} months`;
-      break;
-    default:
-      dateFormat = "to_char(created_at, 'YYYY-MM-DD')";
-      interval = `${last} days`;
+  const params = [];
+  let paramIndex = 1;
+
+  // Фільтр за діапазоном дат
+  if (startDate && endDate) {
+    // Для requests таблиці
+    requestConditions.push(
+      `r.created_at BETWEEN $${paramIndex++} AND $${paramIndex++}`
+    );
+
+    // Для salaries таблиці (використовуємо ті ж параметри)
+    salaryConditions.push(
+      `s.paid_at BETWEEN $${paramIndex - 2} AND $${paramIndex - 1}`
+    );
+
+    const newEndDate = new Date(endDate);
+    newEndDate.setDate(newEndDate.getDate() + 1);
+    params.push(startDate, newEndDate.toISOString());
   }
 
-  // Виконання запиту
-  const query = `
-    SELECT 
-      ${dateFormat} as period,
-      request_type,
-      COUNT(*) as count
-    FROM 
-      requests
-    WHERE 
-      created_at >= NOW() - INTERVAL '${interval}'
-    GROUP BY 
-      period, request_type
-    ORDER BY 
-      period
+  const requestWhereClause =
+    requestConditions.length > 0
+      ? `WHERE ${requestConditions.join(" AND ")}`
+      : "";
+
+  const salaryWhereClause =
+    salaryConditions.length > 0
+      ? `WHERE ${salaryConditions.join(" AND ")}`
+      : "";
+
+  // SQL-запит для агрегації даних по запитах (поповнення та витрати) по відділах
+  const requestsQuery = `
+    SELECT
+      COALESCE(d.name, 'Невизначений відділ') as department_name,
+      d.id as department_id,
+      SUM(CASE WHEN r.request_type = 'agent_refill' THEN ar.amount ELSE 0 END) as agent_refill_amount,
+      COUNT(CASE WHEN r.request_type = 'agent_refill' THEN r.id END) as agent_refill_count,
+      SUM(CASE WHEN r.request_type = 'expenses' THEN er.amount ELSE 0 END) as expense_amount,
+      COUNT(CASE WHEN r.request_type = 'expenses' THEN r.id END) as expense_count
+    FROM
+      requests r
+    JOIN
+      users u ON r.user_id = u.id
+    LEFT JOIN
+      departments d ON u.department_id = d.id
+    LEFT JOIN
+      agent_refill_requests ar ON r.id = ar.request_id AND r.request_type = 'agent_refill'
+    LEFT JOIN
+      expense_requests er ON r.id = er.request_id AND r.request_type = 'expenses'
+    ${requestWhereClause}
+    GROUP BY
+      d.id, d.name
+    ORDER BY
+      (SUM(CASE WHEN r.request_type = 'agent_refill' THEN ar.amount ELSE 0 END) +
+       SUM(CASE WHEN r.request_type = 'expenses' THEN er.amount ELSE 0 END)) DESC
   `;
 
-  const result = await db.query(query);
+  // SQL-запит для сум зарплат по відділах
+  const salariesQuery = `
+    SELECT
+      COALESCE(d.name, 'Невизначений відділ') as department_name,
+      d.id as department_id,
+      SUM(s.amount) as salary_amount,
+      COUNT(s.id) as salary_count
+    FROM
+      salaries s
+    JOIN
+      users u ON s.user_id = u.id
+    LEFT JOIN
+      departments d ON u.department_id = d.id
+    ${salaryWhereClause}
+    GROUP BY
+      d.id, d.name
+    ORDER BY
+      SUM(s.amount) DESC
+  `;
 
-  return result.rows;
+  // Виконуємо обидва запити
+  const [requestsResult, salariesResult] = await Promise.all([
+    db.query(requestsQuery, params),
+    db.query(salariesQuery, params.length > 0 ? params : []),
+  ]);
+
+  // Об'єднуємо результати
+  const departmentMap = new Map();
+
+  // Обробляємо дані з запитів (поповнення та витрати)
+  requestsResult.rows.forEach((row) => {
+    const departmentKey = row.department_id || "null";
+    departmentMap.set(departmentKey, {
+      department_id: row.department_id,
+      department_name: row.department_name,
+      agent_refill_amount: parseFloat(row.agent_refill_amount || 0),
+      agent_refill_count: parseInt(row.agent_refill_count || 0),
+      expense_amount: parseFloat(row.expense_amount || 0),
+      expense_count: parseInt(row.expense_count || 0),
+      salary_amount: 0,
+      salary_count: 0,
+    });
+  });
+
+  // Додаємо дані з зарплат
+  salariesResult.rows.forEach((row) => {
+    const departmentKey = row.department_id || "null";
+    if (departmentMap.has(departmentKey)) {
+      const dept = departmentMap.get(departmentKey);
+      dept.salary_amount = parseFloat(row.salary_amount || 0);
+      dept.salary_count = parseInt(row.salary_count || 0);
+    } else {
+      departmentMap.set(departmentKey, {
+        department_id: row.department_id,
+        department_name: row.department_name,
+        agent_refill_amount: 0,
+        agent_refill_count: 0,
+        expense_amount: 0,
+        expense_count: 0,
+        salary_amount: parseFloat(row.salary_amount || 0),
+        salary_count: parseInt(row.salary_count || 0),
+      });
+    }
+  });
+
+  // Конвертуємо Map в масив і обчислюємо загальні суми
+  const result = Array.from(departmentMap.values()).map((dept) => {
+    const total_amount =
+      dept.agent_refill_amount + dept.expense_amount + dept.salary_amount;
+    const total_count =
+      dept.agent_refill_count + dept.expense_count + dept.salary_count;
+
+    return {
+      ...dept,
+      total_amount: parseFloat(total_amount.toFixed(2)),
+      total_count,
+    };
+  });
+
+  // Сортуємо за загальною сумою
+  return result.sort((a, b) => b.total_amount - a.total_amount);
 };
 
 /**
@@ -1358,6 +1338,373 @@ const getAllRequests = async ({
 };
 
 /**
+ * Отримує всі поповнення агентів з фільтрацією та пагінацією
+ * @param {Object} options - Опції для фільтрації та пагінації
+ * @param {number} [options.page=1] - Номер сторінки
+ * @param {number} [options.limit=10] - Кількість записів на сторінці
+ * @param {string} [options.status] - Статус заявки
+ * @param {Date} [options.startDate] - Початкова дата для фільтрації
+ * @param {Date} [options.endDate] - Кінцева дата для фільтрації
+ * @param {number} [options.minAmount] - Мінімальна сума
+ * @param {number} [options.maxAmount] - Максимальна сума
+ * @param {string} [options.server] - Сервер для фільтрації
+ * @param {number} [options.agentId] - ID агента для фільтрації
+ * @param {number} [options.teamId] - ID команди для фільтрації
+ * @param {number} [options.departmentId] - ID відділу для фільтрації
+ * @param {number} [options.userId] - ID користувача для фільтрації
+ * @param {string} [options.network] - Мережа для фільтрації
+ * @returns {Promise<Object>} Об'єкт з даними та інформацією про пагінацію
+ */
+const getAllAgentRefills = async ({
+  page = 1,
+  limit = 10,
+  status,
+  startDate,
+  endDate,
+  minAmount,
+  maxAmount,
+  server,
+  agentId,
+  teamId,
+  departmentId,
+  userId,
+  network,
+}) => {
+  const offset = (page - 1) * limit;
+
+  // Побудова WHERE умов на основі фільтрів
+  const conditions = ["TRUE"];
+  const params = [];
+  let paramIndex = 1;
+
+  if (status) {
+    conditions.push(`r.status = $${paramIndex++}`);
+    params.push(status);
+  }
+
+  if (startDate) {
+    conditions.push(`r.created_at >= $${paramIndex++}`);
+    params.push(startDate.toISOString());
+  }
+
+  if (endDate) {
+    conditions.push(`r.created_at <= $${paramIndex++}`);
+    const newEndDate = new Date(endDate);
+    newEndDate.setDate(newEndDate.getDate() + 1);
+    params.push(newEndDate.toISOString());
+  }
+
+  if (minAmount) {
+    conditions.push(`ar.amount >= $${paramIndex++}`);
+    params.push(minAmount);
+  }
+
+  if (maxAmount) {
+    conditions.push(`ar.amount <= $${paramIndex++}`);
+    params.push(maxAmount);
+  }
+
+  if (server) {
+    conditions.push(`ar.server ILIKE $${paramIndex++}`);
+    params.push(`%${server}%`);
+  }
+
+  if (agentId) {
+    conditions.push(`ar.agent_id = $${paramIndex++}`);
+    params.push(agentId);
+  }
+
+  if (teamId) {
+    conditions.push(`u.team_id = $${paramIndex++}`);
+    params.push(teamId);
+  }
+
+  // Додаємо фільтр по відділу
+  if (departmentId) {
+    conditions.push(`u.department_id = $${paramIndex++}`);
+    params.push(departmentId);
+  }
+
+  // Додаємо фільтр по користувачу
+  if (userId) {
+    conditions.push(`u.id = $${paramIndex++}`);
+    params.push(userId);
+  }
+
+  // Додаємо фільтр по мережі
+  if (network) {
+    conditions.push(`ar.network = $${paramIndex++}`);
+    params.push(network);
+  }
+
+  const whereClause = conditions.join(" AND ");
+
+  // Виконання запиту для отримання даних з пагінацією
+  const query = `
+    SELECT 
+      r.id,
+      r.status,
+      r.created_at,
+      r.updated_at,
+      r.request_type,
+      a.name as agent_name,
+      a.id as agent_id,
+      ar.server,
+      ar.amount,
+      ar.wallet_address,
+      ar.network,
+      ar.transaction_hash,
+      ar.fee,
+      u.id as created_by_id,
+      u.username as created_by_username,
+      CONCAT(u.first_name, ' ', u.last_name) as created_by_name,
+      u.team_id,
+      t.name as team_name,
+      tl.id as teamlead_id,
+      tl.username as teamlead_username,
+      CONCAT(tl.first_name, ' ', tl.last_name) as teamlead_name,
+      fm.id as finance_manager_id,
+      fm.username as finance_manager_username,
+      CONCAT(fm.first_name, ' ', fm.last_name) as finance_manager_name,
+      d.id as department_id,
+      d.name as department_name
+    FROM 
+      agent_refill_requests ar
+    JOIN 
+      agents a ON ar.agent_id = a.id
+    JOIN 
+      requests r ON ar.request_id = r.id
+    JOIN 
+      users u ON r.user_id = u.id
+    LEFT JOIN 
+      teams t ON u.team_id = t.id
+    LEFT JOIN 
+      users tl ON r.teamlead_id = tl.id
+    LEFT JOIN 
+      users fm ON r.finance_manager_id = fm.id
+    LEFT JOIN
+      departments d ON u.department_id = d.id
+    WHERE 
+      ${whereClause}
+    ORDER BY 
+      r.created_at DESC
+    LIMIT $${paramIndex++} OFFSET $${paramIndex++}
+  `;
+
+  params.push(parseInt(limit), offset);
+
+  // Виконання запиту для отримання загальної кількості результатів
+  const countQuery = `
+    SELECT 
+      COUNT(*) as total,
+      SUM(
+        ar.amount
+      ) as total_amount
+    FROM 
+      agent_refill_requests ar
+    JOIN 
+      agents a ON ar.agent_id = a.id
+    JOIN 
+      requests r ON ar.request_id = r.id
+    JOIN 
+      users u ON r.user_id = u.id
+    LEFT JOIN 
+      teams t ON u.team_id = t.id
+    LEFT JOIN
+      departments d ON u.department_id = d.id
+    WHERE 
+      ${whereClause}
+  `;
+
+  const [dataResult, countResult] = await Promise.all([
+    db.query(query, params),
+    db.query(countQuery, params.slice(0, params.length - 2)),
+  ]);
+
+  const total = parseInt(countResult.rows[0].total);
+  const totalPages = Math.ceil(total / limit);
+  const totalAmount = parseFloat(countResult.rows[0].total_amount) || 0;
+
+  return {
+    data: dataResult.rows,
+    pagination: {
+      total,
+      totalPages,
+      totalAmount,
+      currentPage: parseInt(page),
+      perPage: parseInt(limit),
+    },
+  };
+};
+
+/**
+ * Отримує всі витрати з фільтрацією та пагінацією
+ * @param {Object} options - Опції для фільтрації та пагінації
+ * @param {number} [options.page=1] - Номер сторінки
+ * @param {number} [options.limit=10] - Кількість записів на сторінці
+ * @param {string} [options.status] - Статус заявки
+ * @param {Date} [options.startDate] - Початкова дата для фільтрації
+ * @param {Date} [options.endDate] - Кінцева дата для фільтрації
+ * @param {number} [options.minAmount] - Мінімальна сума
+ * @param {number} [options.maxAmount] - Максимальна сума
+ * @param {string} [options.network] - Мережа для фільтрації
+ * @param {string} [options.purpose] - Призначення платежу (пошук за частковим збігом)
+ * @param {number} [options.teamId] - ID команди для фільтрації
+ * @returns {Promise<Object>} Об'єкт з даними та інформацією про пагінацію
+ */
+const getAllExpenses = async ({
+  page = 1,
+  limit = 10,
+  status,
+  startDate,
+  endDate,
+  minAmount,
+  maxAmount,
+  network,
+  purpose,
+  teamId,
+  departmentId,
+}) => {
+  try {
+    const offset = (page - 1) * limit;
+
+    // Побудова WHERE умов на основі фільтрів
+    const conditions = ["TRUE"];
+    const params = [];
+    let paramIndex = 1;
+
+    if (status) {
+      conditions.push(`r.status = $${paramIndex++}`);
+      params.push(status);
+    }
+
+    if (startDate) {
+      conditions.push(`r.created_at >= $${paramIndex++}`);
+      params.push(startDate.toISOString());
+    }
+
+    if (endDate) {
+      conditions.push(`r.created_at <= $${paramIndex++}`);
+      const newEndDate = new Date(endDate);
+      newEndDate.setDate(newEndDate.getDate() + 1);
+      params.push(newEndDate.toISOString());
+    }
+
+    if (minAmount) {
+      conditions.push(`er.amount >= $${paramIndex++}`);
+      params.push(minAmount);
+    }
+
+    if (maxAmount) {
+      conditions.push(`er.amount <= $${paramIndex++}`);
+      params.push(maxAmount);
+    }
+
+    if (network) {
+      conditions.push(`er.network = $${paramIndex++}`);
+      params.push(network);
+    }
+
+    if (purpose) {
+      conditions.push(`er.purpose ILIKE $${paramIndex++}`);
+      params.push(`%${purpose}%`);
+    }
+
+    if (teamId) {
+      conditions.push(`u.team_id = $${paramIndex++}`);
+      params.push(teamId);
+    }
+
+    if (departmentId) {
+      conditions.push(`r.department_id = $${paramIndex++}`);
+      params.push(departmentId);
+    }
+
+    const whereClause = conditions.join(" AND ");
+
+    // Виконання запиту для отримання даних з пагінацією
+    const query = `
+      SELECT 
+        r.id,
+        r.status,
+        r.created_at,
+        r.department_id,
+        er.purpose,
+        er.seller_service,
+        er.amount,
+        er.network,
+        er.wallet_address,
+        er.transaction_hash,
+        er.transaction_time,
+        et.id as expense_type_id,
+        et.name as expense_type_name,
+        u.username as created_by_username,
+        CONCAT(u.first_name, ' ', u.last_name) as created_by_name,
+        t.name as team_name,
+        fm.username as finance_manager_username,
+        CONCAT(fm.first_name, ' ', fm.last_name) as finance_manager_name
+      FROM 
+        expense_requests er
+      JOIN 
+        requests r ON er.request_id = r.id
+      JOIN 
+        users u ON r.user_id = u.id
+      JOIN 
+        teams t ON u.team_id = t.id
+      JOIN 
+        expense_types et ON er.expense_type_id = et.id
+      LEFT JOIN 
+        users fm ON r.finance_manager_id = fm.id
+      WHERE 
+        ${whereClause}
+      ORDER BY 
+        r.created_at DESC
+      LIMIT $${paramIndex++} OFFSET $${paramIndex++}
+    `;
+
+    console.log(query);
+
+    params.push(parseInt(limit), offset);
+
+    // Виконання запиту для отримання загальної кількості результатів
+    const countQuery = `
+      SELECT 
+        COUNT(*) as total
+      FROM 
+        expense_requests er
+      JOIN 
+        requests r ON er.request_id = r.id
+      JOIN 
+        users u ON r.user_id = u.id
+      JOIN 
+        teams t ON u.team_id = t.id
+      WHERE 
+        ${whereClause}
+    `;
+
+    const [dataResult, countResult] = await Promise.all([
+      db.query(query, params),
+      db.query(countQuery, params.slice(0, params.length - 2)),
+    ]);
+
+    const total = parseInt(countResult.rows[0].total);
+    const totalPages = Math.ceil(total / limit);
+
+    return {
+      data: dataResult.rows,
+      pagination: {
+        total,
+        totalPages,
+        currentPage: parseInt(page),
+        perPage: parseInt(limit),
+      },
+    };
+  } catch (error) {
+    console.error(error);
+  }
+};
+
+/**
  * Оновлює деталі заявки на поповнення агента
  * @param {number} requestId - ID запиту
  * @param {Object} updateData - Дані для оновлення
@@ -1639,21 +1986,20 @@ const deleteRequest = async (requestId) => {
   }
 };
 
-// Додати експортовані функції до модуля:
 module.exports = {
-  // Існуючі експорти...
-  getRequestStatusStats,
-  getRequestsTrend,
+  //STATISTICS
   getMonthlyExpenseSummary,
-  getWeeklyExpenseSummary, // Новий експорт,
-  getRequestsCountByPeriod,
-  getRequestById,
+  getWeeklyExpenseSummary,
+  getDepartmentExpenseStats,
   getFinanceManagerStats,
   getStatistics,
   getRequestTypeSummary,
 
-  // Нові функції
+  // GENERAL
   getAllRequests,
+  getRequestById,
+  getAllAgentRefills,
+  getAllExpenses,
   updateAgentRefillRequest,
   updateExpenseRequest,
   updateRequestStatus,

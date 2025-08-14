@@ -159,115 +159,6 @@ const getUserCountInDepartment = async (departmentId) => {
 };
 
 /**
- * Отримує структуру відділів та користувачів (ієрархію)
- * @param {boolean} [onlyActive=true] - Включати тільки активні відділи та користувачів
- * @returns {Promise<Array>} Масив з ієрархією відділів та користувачів
- */
-const getDepartmentsStructure = async (onlyActive = true) => {
-  let query = `
-    SELECT 
-      d.id as department_id,
-      d.name as department_name,
-      d.description as department_description,
-      d.is_active as department_is_active,
-      u.id as user_id,
-      u.username,
-      u.first_name,
-      u.last_name,
-      u.role,
-      u.is_active as user_is_active
-    FROM 
-      departments d
-    LEFT JOIN 
-      users u ON d.id = u.department_id
-  `;
-  
-  if (onlyActive) {
-    query += ` WHERE d.is_active = true`;
-    if (onlyActive) {
-      query += ` AND (u.id IS NULL OR u.is_active = true)`;
-    }
-  }
-  
-  query += ` ORDER BY d.name, u.role DESC, u.first_name, u.last_name`;
-  
-  const result = await db.query(query);
-  
-  // Структуруємо дані в ієрархічний формат
-  const structure = [];
-  const departmentsMap = {};
-  
-  result.rows.forEach(row => {
-    const departmentId = row.department_id;
-    
-    // Якщо відділ ще не додано в структуру
-    if (!departmentsMap[departmentId]) {
-      departmentsMap[departmentId] = {
-        id: departmentId,
-        name: row.department_name,
-        description: row.department_description,
-        is_active: row.department_is_active,
-        users: []
-      };
-      
-      structure.push(departmentsMap[departmentId]);
-    }
-    
-    // Додаємо користувача до відділу, якщо він є
-    if (row.user_id) {
-      departmentsMap[departmentId].users.push({
-        id: row.user_id,
-        username: row.username,
-        first_name: row.first_name,
-        last_name: row.last_name,
-        role: row.role,
-        is_active: row.user_is_active
-      });
-    }
-  });
-  
-  return structure;
-};
-
-/**
- * Отримує статистику по відділах
- * @returns {Promise<Object>} Статистика відділів
- */
-const getDepartmentsStats = async () => {
-  const query = `
-    SELECT
-      COUNT(*) as total_departments,
-      SUM(CASE WHEN is_active = true THEN 1 ELSE 0 END) as active_departments,
-      SUM(CASE WHEN is_active = false THEN 1 ELSE 0 END) as inactive_departments
-    FROM 
-      departments
-  `;
-  
-  const userDistributionQuery = `
-    SELECT 
-      d.id,
-      d.name,
-      COUNT(u.id) as user_count
-    FROM 
-      departments d
-    LEFT JOIN 
-      users u ON d.id = u.department_id
-    GROUP BY 
-      d.id, d.name
-    ORDER BY 
-      user_count DESC
-  `;
-  
-  const result = await db.query(query);
-  const userDistribution = await db.query(userDistributionQuery);
-  
-  return {
-    summary: result.rows[0],
-    userDistribution: userDistribution.rows
-  };
-};
-
-/**
  * Видаляє відділ (якщо немає користувачів у ньому)
  * @param {number} id - ID відділу
  * @returns {Promise<boolean>} Результат видалення
@@ -316,7 +207,5 @@ module.exports = {
   deactivateDepartment,
   activateDepartment,
   getUserCountInDepartment,
-  getDepartmentsStructure,
-  getDepartmentsStats,
   deleteDepartment
 };

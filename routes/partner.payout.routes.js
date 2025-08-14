@@ -31,28 +31,6 @@ router.get(
 );
 
 /**
- * @route   GET /api/partner-payouts/partner/:partnerId
- * @desc    Отримання всіх заявок партнера
- * @access  Private/Admin/BizDev/Finance
- */
-router.get(
-  "/partner/:partnerId",
-  roleMiddleware("admin", "bizdev", "finance_manager"),
-  partnerPayoutController.getPayoutRequestsByPartner
-);
-
-/**
- * @route   GET /api/partner-payouts/team/:teamId
- * @desc    Отримання всіх заявок команди
- * @access  Private/Admin/BizDev/Finance
- */
-router.get(
-  "/team/:teamId",
-  roleMiddleware("admin", "bizdev", "finance_manager"),
-  partnerPayoutController.getPayoutRequestsByTeam
-);
-
-/**
  * @route   GET /api/partner-payouts/:id
  * @desc    Отримання детальної інформації про заявку за ID
  * @access  Private/Admin/BizDev/Finance

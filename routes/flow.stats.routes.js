@@ -17,19 +17,6 @@ router.use(authMiddleware);
 router.post('/', flowStatsController.upsertFlowStat);
 
 /**
- * Масове оновлення статистики
- * POST /api/flow-stats/bulk
- * Body: { 
- *   flow_id, 
- *   stats: [
- *     { day, month, year, spend, installs, regs, deps, verified_deps, cpa, notes },
- *     ...
- *   ]
- * }
- */
-router.post('/bulk', flowStatsController.bulkUpsertFlowStats);
-
-/**
  * Отримання всіх потоків зі статистикою за певний день з фільтрацією за партнерами
  * GET /api/flow-stats/daily/:year/:month/:day
  * Query params: partnerId, partnerIds[], status, teamId, userId, page, limit, includeUsers

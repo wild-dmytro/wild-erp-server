@@ -1,9 +1,6 @@
 const requestModel = require("../models/request.model");
-const agentModel = require("../models/agent.model");
-const expenseModel = require("../models/expense.model");
 const userModel = require("../models/user.model");
 const { validationResult } = require("express-validator");
-const { isValid } = require('date-fns');
 
 /**
  * Отримує всі заявки з фільтрацією та пагінацією
@@ -86,7 +83,7 @@ exports.getAllRequests = async (req, res) => {
     const currentUserRole = req.userRole;
 
     // Якщо роль користувача 'user', можна бачити тільки свої заявки
-    if (currentUserRole === 'user') {
+    if (currentUserRole === 'buyer') {
       params.userId = currentUserId;
     }
     // Якщо роль 'teamlead', обмежуємо доступ до команди
@@ -128,8 +125,6 @@ exports.getRequestById = async (req, res) => {
   try {
     const requestId = parseInt(req.params.id);
 
-    console.log("huy")
-
     if (isNaN(requestId)) {
       return res.status(400).json({
         success: false,
@@ -152,7 +147,7 @@ exports.getRequestById = async (req, res) => {
     const currentUserRole = req.userRole;
 
     // Якщо роль користувача 'user', можна бачити тільки свої заявки
-    if (currentUserRole === 'user' && request.user_id !== currentUserId) {
+    if (currentUserRole === 'buyer' && request.user_id !== currentUserId) {
       return res.status(403).json({
         success: false,
         message: "Доступ заборонено"
@@ -232,7 +227,7 @@ exports.getAllExpenses = async (req, res) => {
     }
 
     // Отримання даних
-    const result = await expenseModel.getAllExpenses({
+    const result = await requestModel.getAllExpenses({
       page: parseInt(page),
       limit: parseInt(limit),
       status,
@@ -325,7 +320,7 @@ exports.getAllAgentRefills = async (req, res) => {
     }
 
     // Отримання даних з розширеними фільтрами
-    const result = await agentModel.getAllAgentRefills({
+    const result = await requestModel.getAllAgentRefills({
       page: parseInt(page),
       limit: parseInt(limit),
       status,

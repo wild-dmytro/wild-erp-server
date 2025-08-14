@@ -79,36 +79,6 @@ router.post(
 );
 
 /**
- * @route   PUT /api/users/:id/team
- * @desc    Призначення користувача до команди
- * @access  Private/Admin
- */
-router.put(
-  '/:id/team',
-  roleMiddleware('admin'),
-  [
-    check('team_id', 'ID команди є обов\'язковим').notEmpty(),
-    check('team_id', 'ID команди має бути числом').isNumeric()
-  ],
-  usersController.assignUserToTeam
-);
-
-/**
- * @route   PUT /api/users/:id/department
- * @desc    Призначення користувача до відділу
- * @access  Private/Admin
- */
-router.put(
-  '/:id/department',
-  roleMiddleware('admin'),
-  [
-    check('department_id', 'ID відділу є обов\'язковим').notEmpty(),
-    check('department_id', 'ID відділу має бути числом').isNumeric()
-  ],
-  usersController.assignUserToDepartment
-);
-
-/**
  * @route   PUT /api/users/:id/role
  * @desc    Зміна ролі користувача
  * @access  Private/Admin
@@ -121,61 +91,6 @@ router.put(
     check('role', 'Недійсна роль').isIn(['user', 'teamlead', 'finance_manager', 'admin'])
   ],
   usersController.updateUserRole
-);
-
-/**
- * @route   GET /api/users/team/:teamId
- * @desc    Отримання всіх користувачів команди
- * @access  Private/Admin/TeamLead
- */
-router.get(
-  '/team/:teamId',
-  roleMiddleware('admin', 'teamlead'),
-  usersController.getUsersByTeam
-);
-
-/**
- * @route   GET /api/users/department/:departmentId
- * @desc    Отримання всіх користувачів відділу
- * @access  Private/Admin/TeamLead
- */
-router.get(
-  '/department/:departmentId',
-  roleMiddleware('admin', 'teamlead'),
-  usersController.getUsersByDepartment
-);
-
-/**
- * @route   GET /api/users/role/:role
- * @desc    Отримання всіх користувачів з певною роллю
- * @access  Private/Admin
- */
-router.get(
-  '/role/:role',
-  roleMiddleware('admin'),
-  usersController.getUsersByRole
-);
-
-/**
- * @route   GET /api/users/search
- * @desc    Пошук користувачів за іменем, прізвищем або username
- * @access  Private/Admin/TeamLead
- */
-router.get(
-  '/search',
-  roleMiddleware('admin', 'teamlead'),
-  usersController.searchUsers
-);
-
-/**
- * @route   GET /api/users/stats
- * @desc    Отримання статистики користувачів (кількість за ролями, активних/неактивних)
- * @access  Private/Admin
- */
-router.get(
-  '/stats/summary',
-  roleMiddleware('admin'),
-  usersController.getUserStats
 );
 
 module.exports = router;

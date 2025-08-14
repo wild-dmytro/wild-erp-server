@@ -39,7 +39,7 @@ module.exports = async (req, res, next) => {
       
       // Перевірка, чи існує користувач
       const userResult = await db.query(
-        'SELECT id, username, email, web_role, is_active FROM users WHERE id = $1',
+        'SELECT id, team_id, username, email, web_role, is_active FROM users WHERE id = $1',
         [decoded.userId]
       );
       
@@ -66,7 +66,8 @@ module.exports = async (req, res, next) => {
         id: user.id,
         username: user.username,
         email: user.email,
-        role: user.web_role
+        role: user.web_role,
+        teamId: user.team_id
       };
       
       next();

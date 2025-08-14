@@ -20,28 +20,6 @@ router.get(
 );
 
 /**
- * @route   GET /api/partner-payments/stats
- * @desc    Отримання статистики платежів
- * @access  Private/Admin/Finance
- */
-router.get(
-  '/stats',
-  roleMiddleware('admin', 'bizdev'),
-  partnerPaymentsController.getPaymentStats
-);
-
-/**
- * @route   GET /api/partner-payments/stats/by-partner
- * @desc    Отримання статистики платежів за партнерами
- * @access  Private/Admin/Finance
- */
-router.get(
-  '/stats/by-partner',
-  roleMiddleware('admin', 'bizdev'),
-  partnerPaymentsController.getPaymentStatsByPartner
-);
-
-/**
  * @route   GET /api/partner-payments/payout-request/:payoutRequestId
  * @desc    Отримання всіх платежів заявки на виплату
  * @access  Private/Admin/Finance
@@ -123,24 +101,6 @@ router.patch(
     check('notes', 'Примітки мають бути рядком').optional().isString()
   ],
   partnerPaymentsController.updatePaymentStatus
-);
-
-/**
- * @route   PATCH /api/partner-payments/:id/blockchain
- * @desc    Оновлення blockchain даних платежу
- * @access  Private/Admin/Finance
- */
-router.patch(
-  '/:id/blockchain',
-  roleMiddleware('admin', 'bizdev'),
-  [
-    check('transaction_hash', 'Хеш транзакції має бути рядком').optional().isString(),
-    check('block_number', 'Номер блоку має бути числом').optional().isInt(),
-    check('gas_used', 'Використаний газ має бути числом').optional().isInt(),
-    check('gas_price', 'Ціна газу має бути числом').optional().isNumeric(),
-    check('confirmation_date', 'Дата підтвердження має бути валідною датою').optional().isISO8601()
-  ],
-  partnerPaymentsController.updateBlockchainData
 );
 
 /**

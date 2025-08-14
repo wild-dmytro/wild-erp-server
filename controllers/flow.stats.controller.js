@@ -73,60 +73,6 @@ const upsertFlowStat = async (req, res) => {
 };
 
 /**
- * Масове оновлення статистики
- * POST /api/flow-stats/bulk
- */
-const bulkUpsertFlowStats = async (req, res) => {
-  try {
-    const { flow_id, stats } = req.body;
-
-    // Валідація
-    if (!flow_id || !Array.isArray(stats) || stats.length === 0) {
-      return res.status(400).json({
-        success: false,
-        message: "Потрібні flow_id та масив stats",
-      });
-    }
-
-    // Перевірка доступу
-    const hasAccess = await flowStatsModel.checkUserAccess(
-      flow_id,
-      req.user.id
-    );
-    if (!hasAccess) {
-      return res.status(403).json({
-        success: false,
-        message: "Немає доступу до цього потоку",
-      });
-    }
-
-    // Додаємо flow_id до кожного елемента статистики
-    const statsWithFlowId = stats.map((stat) => ({
-      ...stat,
-      flow_id,
-    }));
-
-    const results = await flowStatsModel.bulkUpsertFlowStats(
-      statsWithFlowId,
-      req.user.id
-    );
-
-    res.status(201).json({
-      success: true,
-      message: `Успішно оновлено ${results.length} записів`,
-      data: results,
-    });
-  } catch (error) {
-    console.error("Помилка при масовому оновленні статистики:", error);
-    res.status(500).json({
-      success: false,
-      message: "Внутрішня помилка сервера",
-      error: process.env.NODE_ENV === "development" ? error.message : undefined,
-    });
-  }
-};
-
-/**
  * Отримання всіх потоків зі статистикою за певний день
  * GET /api/flow-stats/daily/:year/:month/:day
  */
@@ -888,7 +834,6 @@ const getMonthlyCalendarStats = async (req, res) => {
 
 module.exports = {
   upsertFlowStat,
-  bulkUpsertFlowStats,
   getFlowStats,
   getUserMonthlyStats,
   getTeamMonthlyStats,

@@ -15,7 +15,7 @@ router.use(authMiddleware);
  */
 router.get(
   '/',
-  roleMiddleware('admin', 'teamlead', 'bizdev'),
+  roleMiddleware('admin', 'teamlead', 'bizdev', 'buyer'),
   teamsController.getAllTeams
 );
 
@@ -69,32 +69,6 @@ router.delete(
   '/:id',
   roleMiddleware('admin'),
   teamsController.deleteTeam
-);
-
-/**
- * @route   GET /api/teams/:id/stats
- * @desc    Отримання статистики команди за період
- * @access  Private/Admin/TeamLead
- */
-router.get(
-  '/:id/stats',
-  roleMiddleware('admin', 'teamlead'),
-  [
-    check('startDate', 'Початкова дата має бути у форматі ISO').optional().isISO8601(),
-    check('endDate', 'Кінцева дата має бути у форматі ISO').optional().isISO8601()
-  ],
-  teamsController.getTeamStats
-);
-
-/**
- * @route   GET /api/teams/details
- * @desc    Отримання всіх команд з детальною інформацією
- * @access  Private/Admin
- */
-router.get(
-  '/details',
-  roleMiddleware('admin'),
-  teamsController.getTeamsWithDetails
 );
 
 module.exports = router;

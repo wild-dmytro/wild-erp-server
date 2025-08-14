@@ -194,116 +194,6 @@ const getTeamLead = async (teamId) => {
   return result.rows[0] || null;
 };
 
-/**
- * Отримує статистику команди за певний період
- * @param {number} teamId - ID команди
- * @param {Date} startDate - Початкова дата
- * @param {Date} endDate - Кінцева дата
- * @returns {Promise<Object>} Статистика команди
- */
-const getTeamStats = async (teamId, startDate, endDate) => {
-  // Перетворення дат у формат ISO для SQL запиту
-  const startDateISO = startDate ? startDate.toISOString() : null;
-  const endDateISO = endDate ? endDate.toISOString() : null;
-  
-  // Запит для отримання статистики по запитах
-  const requestsStatsQuery = `
-    SELECT
-      COUNT(*) as total_requests,
-      SUM(CASE WHEN r.request_type = 'agent_refill' THEN 1 ELSE 0 END) as agent_refill_count,
-      SUM(CASE WHEN r.request_type = 'expenses' THEN 1 ELSE 0 END) as expenses_count,
-      SUM(CASE WHEN r.status = 'approved_by_finance' OR r.status = 'completed' THEN 1 ELSE 0 END) as approved_count,
-      SUM(CASE WHEN r.status = 'rejected_by_teamlead' OR r.status = 'rejected_by_finance' THEN 1 ELSE 0 END) as rejected_count
-    FROM
-      requests r
-    JOIN
-      users u ON r.user_id = u.id
-    WHERE
-      u.team_id = $1
-      ${startDateISO ? 'AND r.created_at >= $2' : ''}
-      ${endDateISO ? `AND r.created_at <= $${startDateISO ? '3' : '2'}` : ''}
-  `;
-  
-  // Параметри для запиту
-  const requestsStatsParams = [teamId];
-  if (startDateISO) requestsStatsParams.push(startDateISO);
-  if (endDateISO) requestsStatsParams.push(endDateISO);
-  
-  // Запит для отримання сум поповнень та витрат
-  const amountsStatsQuery = `
-    SELECT
-      COALESCE(SUM(CASE WHEN r.request_type = 'agent_refill' AND (r.status = 'approved_by_finance' OR r.status = 'completed') THEN ar.amount ELSE 0 END), 0) as total_agent_refill,
-      COALESCE(SUM(CASE WHEN r.request_type = 'expenses' AND (r.status = 'approved_by_finance' OR r.status = 'completed') THEN er.amount ELSE 0 END), 0) as total_expenses
-    FROM
-      requests r
-    JOIN
-      users u ON r.user_id = u.id
-    LEFT JOIN
-      agent_refill_requests ar ON r.id = ar.request_id AND r.request_type = 'agent_refill'
-    LEFT JOIN
-      expense_requests er ON r.id = er.request_id AND r.request_type = 'expenses'
-    WHERE
-      u.team_id = $1
-      ${startDateISO ? 'AND r.created_at >= $2' : ''}
-      ${endDateISO ? `AND r.created_at <= $${startDateISO ? '3' : '2'}` : ''}
-  `;
-  
-  // Параметри для запиту сум (ті ж самі, що і для першого запиту)
-  const amountsStatsParams = [...requestsStatsParams];
-  
-  // Виконання запитів
-  const requestsStatsResult = await db.query(requestsStatsQuery, requestsStatsParams);
-  const amountsStatsResult = await db.query(amountsStatsQuery, amountsStatsParams);
-  
-  // Отримання кількості активних користувачів у команді
-  const activeUsersCountQuery = `
-    SELECT COUNT(*) as active_users_count
-    FROM users
-    WHERE team_id = $1 AND is_active = true
-  `;
-  
-  const activeUsersCountResult = await db.query(activeUsersCountQuery, [teamId]);
-  
-  // Формування результату
-  return {
-    requests: requestsStatsResult.rows[0],
-    amounts: amountsStatsResult.rows[0],
-    activeUsersCount: parseInt(activeUsersCountResult.rows[0].active_users_count)
-  };
-};
-
-/**
- * Отримує всі команди з детальною інформацією (користувачі, тімлід)
- * @returns {Promise<Array>} Масив команд з детальною інформацією
- */
-const getTeamsWithDetails = async () => {
-  // Спочатку отримуємо всі команди
-  const teams = await getAllTeams();
-  
-  // Для кожної команди отримуємо додаткову інформацію
-  const teamsWithDetails = await Promise.all(teams.map(async (team) => {
-    // Отримуємо тімліда
-    const teamLead = await getTeamLead(team.id);
-    
-    // Отримуємо кількість користувачів
-    const userCount = await getUserCountInTeam(team.id);
-    
-    // Повертаємо розширені дані
-    return {
-      ...team,
-      teamLead: teamLead ? {
-        id: teamLead.id,
-        username: teamLead.username,
-        first_name: teamLead.first_name,
-        last_name: teamLead.last_name
-      } : null,
-      userCount
-    };
-  }));
-  
-  return teamsWithDetails;
-};
-
 module.exports = {
   getAllTeams,
   getTeamById,
@@ -312,7 +202,5 @@ module.exports = {
   updateTeam,
   deleteTeam,
   getUserCountInTeam,
-  getTeamLead,
-  getTeamStats,
-  getTeamsWithDetails
+  getTeamLead
 };

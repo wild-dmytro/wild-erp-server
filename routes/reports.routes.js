@@ -1,7 +1,6 @@
 const express = require('express');
 const router = express.Router();
 const reportsController = require('../controllers/reports.controller');
-const departmentsController = require('../controllers/departments.controller');
 const authMiddleware = require('../middleware/auth.middleware');
 const roleMiddleware = require('../middleware/role.middleware');
 
@@ -45,20 +44,6 @@ router.get('/stats/request-type-summary', reportsController.getRequestTypeSummar
  * @desc    Отримання статистики витрат за відділами
  * @access  Private
  */
-router.get('/stats/departments', departmentsController.getDepartmentExpenseStats);
-
-/**
- * @route   GET /api/reports/stats/departments/:departmentId
- * @desc    Отримання детальної статистики конкретного відділу
- * @access  Private
- */
-router.get('/stats/departments/:departmentId', departmentsController.getDepartmentDetailStats);
-
-/**
- * @route   GET /api/reports/stats/departments/top
- * @desc    Отримання топ-5 відділів за обраною метрикою
- * @access  Private
- */
-router.get('/stats/departments-top', departmentsController.getTopDepartments);
+router.get('/stats/departments', reportsController.getDepartmentExpenseStats);
 
 module.exports = router;

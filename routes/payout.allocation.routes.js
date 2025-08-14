@@ -37,27 +37,6 @@ const createAllocationValidation = [
     .withMessage("Нотатки не можуть перевищувати 1000 символів"),
 ];
 
-// Валідація для масового створення розподілів
-const bulkAllocationValidation = [
-  body("allocations")
-    .isArray({ min: 1 })
-    .withMessage("Розподіли мають бути передані як непустий масив"),
-  body("allocations.*.user_id")
-    .isInt({ min: 1 })
-    .withMessage("ID користувача має бути позитивним числом"),
-  body("allocations.*.flow_id")
-    .optional()
-    .isInt({ min: 1 })
-    .withMessage("ID потоку має бути позитивним числом"),
-  body("allocations.*.allocated_amount")
-    .isFloat({ min: 0.01 })
-    .withMessage("Сума розподілу має бути більше 0"),
-  body("allocations.*.percentage")
-    .optional()
-    .isFloat({ min: 0, max: 100 })
-    .withMessage("Відсоток має бути від 0 до 100"),
-];
-
 // Отримання користувачів для розподілу коштів
 // GET /api/payout-allocations/:payoutRequestId/users
 router.get(
@@ -86,16 +65,6 @@ router.post(
   payoutAllocationController.createAllocation
 );
 
-// Масове створення/оновлення розподілів
-// POST /api/payout-allocations/:payoutRequestId/bulk
-router.post(
-  "/:payoutRequestId/bulk",
-  authMiddleware,
-  roleMiddleware("admin", "teamlead", "bizdev"),
-  bulkAllocationValidation,
-  payoutAllocationController.bulkUpsertAllocations
-);
-
 // Оновлення розподілу коштів
 // PUT /api/payout-allocations/allocation/:allocationId
 router.put(
@@ -112,24 +81,6 @@ router.delete(
   authMiddleware,
   roleMiddleware("admin", "teamlead", "bizdev"),
   payoutAllocationController.deleteAllocation
-);
-
-// Підтвердження всіх розподілів для заявки
-// POST /api/payout-allocations/:payoutRequestId/confirm
-router.post(
-  "/:payoutRequestId/confirm",
-  authMiddleware,
-  roleMiddleware("admin", "teamlead", "bizdev"),
-  payoutAllocationController.confirmAllAllocations
-);
-
-// Отримання статистики розподілів для заявки
-// GET /api/payout-allocations/:payoutRequestId/stats
-router.get(
-  "/:payoutRequestId/stats",
-  authMiddleware,
-  roleMiddleware("admin", "teamlead", "bizdev"),
-  payoutAllocationController.getAllocationStats
 );
 
 module.exports = router;

@@ -86,26 +86,4 @@ router.delete(
   departmentsController.deleteDepartment
 );
 
-/**
- * @route   GET /api/departments/structure
- * @desc    Отримання структури відділів та користувачів
- * @access  Private/Admin
- */
-router.get(
-  '/structure',
-  roleMiddleware('admin'),
-  departmentsController.getDepartmentsStructure
-);
-
-/**
- * @route   GET /api/departments/stats
- * @desc    Отримання статистики по відділах
- * @access  Private/Admin
- */
-router.get(
-  '/stats',
-  roleMiddleware('admin'),
-  departmentsController.getDepartmentsStats
-);
-
 module.exports = router;

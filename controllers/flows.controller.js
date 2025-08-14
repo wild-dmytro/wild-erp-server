@@ -87,6 +87,14 @@ const getAllFlows = async (req, res) => {
       endDate: req.query.endDate,
     };
 
+    const roleCheck = await applyRoleFilters(req, options);
+    if (!roleCheck.success) {
+      return res.status(roleCheck.statusCode).json({
+        success: false,
+        message: roleCheck.message,
+      });
+    }
+
     const result = await flowModel.getAllFlows(options);
 
     res.json({
@@ -267,129 +275,6 @@ const deleteFlow = async (req, res) => {
 };
 
 /**
- * Робота з командами
- */
-
-/**
- * Отримання потоків команди
- * GET /api/flows/team/:teamId
- */
-const getFlowsByTeam = async (req, res) => {
-  try {
-    const teamId = parseInt(req.params.teamId);
-
-    if (isNaN(teamId)) {
-      return res.status(400).json({
-        success: false,
-        message: "Недійсний ID команди",
-      });
-    }
-
-    const options = {
-      status: req.query.status,
-      onlyActive: req.query.onlyActive !== "false",
-      limit: parseInt(req.query.limit) || 50,
-      offset: parseInt(req.query.offset) || 0,
-    };
-
-    const flows = await flowModel.getFlowsByTeam(teamId, options);
-
-    res.json({
-      success: true,
-      data: flows,
-    });
-  } catch (error) {
-    console.error("Помилка отримання потоків команди:", error);
-    res.status(500).json({
-      success: false,
-      message: "Внутрішня помилка сервера",
-      error: process.env.NODE_ENV === "development" ? error.message : undefined,
-    });
-  }
-};
-
-/**
- * Перенесення потоку до іншої команди
- * PATCH /api/flows/:id/transfer-team
- */
-const transferFlowToTeam = async (req, res) => {
-  try {
-    if (handleValidationErrors(req, res)) return;
-
-    const flowId = parseInt(req.params.id);
-    const { team_id } = req.body;
-
-    if (isNaN(flowId)) {
-      return res.status(400).json({
-        success: false,
-        message: "Недійсний ID потоку",
-      });
-    }
-
-    if (!team_id || isNaN(parseInt(team_id))) {
-      return res.status(400).json({
-        success: false,
-        message: "Недійсний ID команди",
-      });
-    }
-
-    const updatedFlow = await flowModel.transferFlowToTeam(
-      flowId,
-      parseInt(team_id),
-      req.user.id
-    );
-
-    if (!updatedFlow) {
-      return res.status(404).json({
-        success: false,
-        message: "Потік не знайдено",
-      });
-    }
-
-    res.json({
-      success: true,
-      message: "Потік успішно перенесено до іншої команди",
-      data: updatedFlow,
-    });
-  } catch (error) {
-    console.error("Помилка перенесення потоку:", error);
-    res.status(500).json({
-      success: false,
-      message: "Внутрішня помилка сервера",
-      error: process.env.NODE_ENV === "development" ? error.message : undefined,
-    });
-  }
-};
-
-/**
- * Отримання статистики потоків по командах
- * GET /api/flows/stats/by-teams
- */
-const getFlowStatsByTeams = async (req, res) => {
-  try {
-    const options = {
-      dateFrom: req.query.dateFrom,
-      dateTo: req.query.dateTo,
-      onlyActive: req.query.onlyActive !== "false",
-    };
-
-    const stats = await flowModel.getFlowStatsByTeams(options);
-
-    res.json({
-      success: true,
-      data: stats,
-    });
-  } catch (error) {
-    console.error("Помилка отримання статистики за командами:", error);
-    res.status(500).json({
-      success: false,
-      message: "Внутрішня помилка сервера",
-      error: process.env.NODE_ENV === "development" ? error.message : undefined,
-    });
-  }
-};
-
-/**
  * Операції зі статусом (існуючі методи залишаються без змін)
  */
 
@@ -486,100 +371,6 @@ const updateFlowActiveStatus = async (req, res) => {
 };
 
 /**
- * Масове оновлення статусу потоків
- * POST /api/flows/bulk-status-update
- */
-const bulkUpdateFlowStatus = async (req, res) => {
-  try {
-    if (handleValidationErrors(req, res)) return;
-
-    const { flowIds, status } = req.body;
-
-    if (!Array.isArray(flowIds) || flowIds.length === 0) {
-      return res.status(400).json({
-        success: false,
-        message: "Список ID потоків є обов'язковим",
-      });
-    }
-
-    const updatedFlows = await flowModel.bulkUpdateFlowStatus(
-      flowIds,
-      status,
-      req.user.id
-    );
-
-    res.json({
-      success: true,
-      message: `Оновлено ${updatedFlows.length} потоків`,
-      data: updatedFlows,
-    });
-  } catch (error) {
-    console.error("Помилка масового оновлення статусу:", error);
-    res.status(500).json({
-      success: false,
-      message: "Внутрішня помилка сервера",
-      error: process.env.NODE_ENV === "development" ? error.message : undefined,
-    });
-  }
-};
-
-/**
- * Масове перенесення потоків до команди
- * POST /api/flows/bulk-transfer-team
- */
-const bulkTransferFlowsToTeam = async (req, res) => {
-  try {
-    if (handleValidationErrors(req, res)) return;
-
-    const { flowIds, team_id } = req.body;
-
-    if (!Array.isArray(flowIds) || flowIds.length === 0) {
-      return res.status(400).json({
-        success: false,
-        message: "Список ID потоків є обов'язковим",
-      });
-    }
-
-    if (!team_id || isNaN(parseInt(team_id))) {
-      return res.status(400).json({
-        success: false,
-        message: "Недійсний ID команди",
-      });
-    }
-
-    const updatedFlows = [];
-
-    for (const flowId of flowIds) {
-      try {
-        const updatedFlow = await flowModel.transferFlowToTeam(
-          parseInt(flowId),
-          parseInt(team_id),
-          req.user.id
-        );
-        if (updatedFlow) {
-          updatedFlows.push(updatedFlow);
-        }
-      } catch (error) {
-        console.error(`Помилка перенесення потоку ${flowId}:`, error);
-      }
-    }
-
-    res.json({
-      success: true,
-      message: `Перенесено ${updatedFlows.length} потоків до команди`,
-      data: updatedFlows,
-    });
-  } catch (error) {
-    console.error("Помилка масового перенесення потоків:", error);
-    res.status(500).json({
-      success: false,
-      message: "Внутрішня помилка сервера",
-      error: process.env.NODE_ENV === "development" ? error.message : undefined,
-    });
-  }
-};
-
-/**
  * Робота з користувачами потоку
  */
 
@@ -607,176 +398,6 @@ const getFlowUsers = async (req, res) => {
     });
   } catch (error) {
     console.error("Помилка отримання користувачів потоку:", error);
-    res.status(500).json({
-      success: false,
-      message: "Внутрішня помилка сервера",
-      error: process.env.NODE_ENV === "development" ? error.message : undefined,
-    });
-  }
-};
-
-/**
- * Додавання користувача до потоку (ВИПРАВЛЕНО - видалено percentage та individual_cpa)
- * POST /api/flows/:id/users
- */
-const addUserToFlow = async (req, res) => {
-  try {
-    if (handleValidationErrors(req, res)) return;
-
-    const flowId = parseInt(req.params.id);
-
-    if (isNaN(flowId)) {
-      return res.status(400).json({
-        success: false,
-        message: "Недійсний ID потоку",
-      });
-    }
-
-    const userData = {
-      ...req.body,
-      created_by: req.user.id,
-    };
-
-    const addedUser = await flowModel.addUserToFlow(flowId, userData);
-
-    res.status(201).json({
-      success: true,
-      message: "Користувача додано до потоку",
-      data: addedUser,
-    });
-  } catch (error) {
-    console.error("Помилка додавання користувача до потоку:", error);
-
-    if (error.message === "Користувач вже доданий до цього потоку") {
-      return res.status(409).json({
-        success: false,
-        message: error.message,
-      });
-    }
-
-    res.status(500).json({
-      success: false,
-      message: "Внутрішня помилка сервера",
-      error: process.env.NODE_ENV === "development" ? error.message : undefined,
-    });
-  }
-};
-
-/**
- * Оновлення користувача в потоці (ВИПРАВЛЕНО - видалено percentage та individual_cpa)
- * PUT /api/flows/:id/users/:userId
- */
-const updateUserInFlow = async (req, res) => {
-  try {
-    if (handleValidationErrors(req, res)) return;
-
-    const flowId = parseInt(req.params.id);
-    const userId = parseInt(req.params.userId);
-
-    if (isNaN(flowId) || isNaN(userId)) {
-      return res.status(400).json({
-        success: false,
-        message: "Недійсні ID потоку або користувача",
-      });
-    }
-
-    const userData = {
-      ...req.body,
-      updated_by: req.user.id,
-    };
-
-    const updatedUser = await flowModel.updateUserInFlow(
-      flowId,
-      userId,
-      userData
-    );
-
-    if (!updatedUser) {
-      return res.status(404).json({
-        success: false,
-        message: "Користувач не знайдений в потоці",
-      });
-    }
-
-    res.json({
-      success: true,
-      message: "Дані користувача в потоці оновлено",
-      data: updatedUser,
-    });
-  } catch (error) {
-    console.error("Помилка оновлення користувача в потоці:", error);
-
-    res.status(500).json({
-      success: false,
-      message: "Внутрішня помилка сервера",
-      error: process.env.NODE_ENV === "development" ? error.message : undefined,
-    });
-  }
-};
-
-/**
- * Видалення користувача з потоку
- * DELETE /api/flows/:id/users/:userId
- */
-const removeUserFromFlow = async (req, res) => {
-  try {
-    const flowId = parseInt(req.params.id);
-    const userId = parseInt(req.params.userId);
-
-    if (isNaN(flowId) || isNaN(userId)) {
-      return res.status(400).json({
-        success: false,
-        message: "Недійсні ID потоку або користувача",
-      });
-    }
-
-    const result = await flowModel.removeUserFromFlow(flowId, userId);
-
-    if (!result.success) {
-      return res.status(404).json(result);
-    }
-
-    res.json(result);
-  } catch (error) {
-    console.error("Помилка видалення користувача з потоку:", error);
-    res.status(500).json({
-      success: false,
-      message: "Внутрішня помилка сервера",
-      error: process.env.NODE_ENV === "development" ? error.message : undefined,
-    });
-  }
-};
-
-/**
- * Отримання потоків користувача
- * GET /api/flows/user/:userId
- */
-const getUserFlows = async (req, res) => {
-  try {
-    const userId = parseInt(req.params.userId);
-
-    if (isNaN(userId)) {
-      return res.status(400).json({
-        success: false,
-        message: "Недійсний ID користувача",
-      });
-    }
-
-    const options = {
-      status: req.query.status,
-      onlyActive: req.query.onlyActive === "true",
-      limit: parseInt(req.query.limit) || 50,
-      offset: parseInt(req.query.offset) || 0,
-    };
-
-    const flows = await flowModel.getUserFlows(userId, options);
-
-    res.json({
-      success: true,
-      data: flows,
-    });
-  } catch (error) {
-    console.error("Помилка отримання потоків користувача:", error);
     res.status(500).json({
       success: false,
       message: "Внутрішня помилка сервера",
@@ -989,121 +610,6 @@ const getUnreadMessagesCount = async (req, res) => {
  */
 
 /**
- * Додавання/оновлення статистики потоку
- * POST /api/flows/:id/stats
- */
-const upsertFlowStats = async (req, res) => {
-  try {
-    if (handleValidationErrors(req, res)) return;
-
-    const flowId = parseInt(req.params.id);
-
-    if (isNaN(flowId)) {
-      return res.status(400).json({
-        success: false,
-        message: "Недійсний ID потоку",
-      });
-    }
-
-    const statsData = {
-      flow_id: flowId,
-      ...req.body,
-    };
-
-    const savedStats = await flowModel.upsertFlowStats(statsData);
-
-    res.json({
-      success: true,
-      message: "Статистику збережено",
-      data: savedStats,
-    });
-  } catch (error) {
-    console.error("Помилка збереження статистики:", error);
-    res.status(500).json({
-      success: false,
-      message: "Внутрішня помилка сервера",
-      error: process.env.NODE_ENV === "development" ? error.message : undefined,
-    });
-  }
-};
-
-/**
- * Отримання статистики потоку
- * GET /api/flows/:id/stats
- */
-const getFlowStats = async (req, res) => {
-  try {
-    const flowId = parseInt(req.params.id);
-
-    if (isNaN(flowId)) {
-      return res.status(400).json({
-        success: false,
-        message: "Недійсний ID потоку",
-      });
-    }
-
-    const options = {
-      dateFrom: req.query.dateFrom,
-      dateTo: req.query.dateTo,
-      userId: req.query.userId ? parseInt(req.query.userId) : undefined,
-      groupBy: req.query.groupBy || "day",
-    };
-
-    const stats = await flowModel.getFlowStats(flowId, options);
-
-    res.json({
-      success: true,
-      data: stats,
-    });
-  } catch (error) {
-    console.error("Помилка отримання статистики потоку:", error);
-    res.status(500).json({
-      success: false,
-      message: "Внутрішня помилка сервера",
-      error: process.env.NODE_ENV === "development" ? error.message : undefined,
-    });
-  }
-};
-
-/**
- * Отримання топ користувачів за метрикою
- * GET /api/flows/:id/top-users
- */
-const getTopUsersByMetric = async (req, res) => {
-  try {
-    const flowId = parseInt(req.params.id);
-
-    if (isNaN(flowId)) {
-      return res.status(400).json({
-        success: false,
-        message: "Недійсний ID потоку",
-      });
-    }
-
-    const options = {
-      metric: req.query.metric || "revenue",
-      dateFrom: req.query.dateFrom,
-      dateTo: req.query.dateTo,
-      limit: parseInt(req.query.limit) || 10,
-    };
-
-    const topUsers = await flowModel.getTopUsersByMetric(flowId, options);
-
-    res.json({
-      success: true,
-      data: topUsers,
-    });
-  } catch (error) {
-    console.error("Помилка отримання топ користувачів:", error);
-    res.status(500).json({
-      success: false,
-      message: "Внутрішня помилка сервера",
-      error: process.env.NODE_ENV === "development" ? error.message : undefined,
-    });
-  }
-};
-
-/**
  * Отримання загальної статистики всіх потоків
  * GET /api/flows/stats/overview
  */
@@ -1112,32 +618,42 @@ const getAllFlowsStats = async (req, res) => {
     // Функція для обробки ID - може прийти як рядок або масив
     const processIds = (ids) => {
       if (!ids) return undefined;
-      
-      if (typeof ids === 'string') {
-        return ids.split(',').map(id => parseInt(id.trim()));
+
+      if (typeof ids === "string") {
+        return ids.split(",").map((id) => parseInt(id.trim()));
       } else if (Array.isArray(ids)) {
-        return ids.map(id => parseInt(id));
+        return ids.map((id) => parseInt(id));
       }
       return undefined;
     };
 
     // Обробка userIds
     const userIds = processIds(req.query.userIds);
-    console.log('Processed userIds:', userIds);
+    console.log("Processed userIds:", userIds);
 
     // Обробка teamIds
     const teamIds = processIds(req.query.teamIds);
-    console.log('Processed teamIds:', teamIds);
+    console.log("Processed teamIds:", teamIds);
 
     const options = {
       dateFrom: req.query.dateFrom,
       dateTo: req.query.dateTo,
       status: req.query.status,
-      partnerId: req.query.partnerId ? parseInt(req.query.partnerId) : undefined,
+      partnerId: req.query.partnerId
+        ? parseInt(req.query.partnerId)
+        : undefined,
       userIds: userIds && userIds.length > 0 ? userIds : undefined,
       teamIds: teamIds && teamIds.length > 0 ? teamIds : undefined,
       onlyActive: req.query.onlyActive == "true" ? true : false,
     };
+
+    const roleCheck = await applyRoleFilters(req, options);
+    if (!roleCheck.success) {
+      return res.status(roleCheck.statusCode).json({
+        success: false,
+        message: roleCheck.message
+      });
+    }
 
     const stats = await flowModel.getAllFlowsStats(options);
 
@@ -1156,62 +672,85 @@ const getAllFlowsStats = async (req, res) => {
 };
 
 /**
- * Отримання статистики потоків за партнерами
- * GET /api/flows/stats/by-partners
+ * УНІВЕРСАЛЬНА ФУНКЦІЯ ДЛЯ ЗАСТОСУВАННЯ РОЛЕВИХ ФІЛЬТРІВ
+ * Можна використовувати в різних методах
  */
-const getFlowStatsByPartners = async (req, res) => {
+const applyRoleFilters = async (req, options) => {
+  const userRole = req.userRole;
+  const userId = req.userId;
+  const teamId = req.user.teamId;
+
   try {
-    const options = {
-      dateFrom: req.query.dateFrom,
-      dateTo: req.query.dateTo,
-      limit: parseInt(req.query.limit) || 20,
-    };
+    switch (userRole) {
+      case "admin":
+      case "bizdev":
+        // Повний доступ
+        return { success: true };
 
-    const stats = await flowModel.getFlowStatsByPartners(options);
+      case "teamlead":
+        if (!teamId) {
+          return {
+            success: false,
+            statusCode: 403,
+            message: "TeamLead повинен мати призначену команду",
+          };
+        }
 
-    res.json({
-      success: true,
-      data: stats,
-    });
-  } catch (error) {
-    console.error("Помилка отримання статистики за партнерами:", error);
-    res.status(500).json({
-      success: false,
-      message: "Внутрішня помилка сервера",
-      error: process.env.NODE_ENV === "development" ? error.message : undefined,
-    });
-  }
-};
+        // Перевірка явно вказаних команд
+        if (options.teamIds || options.teamId) {
+          const requestedTeamIds = options.teamIds || [options.teamId];
+          const hasAccess = requestedTeamIds.every(
+            (teamId) => teamId === teamId
+          );
 
-/**
- * Перевірка доступу користувача до потоку
- * GET /api/flows/:id/access-check
- */
-const checkUserFlowAccess = async (req, res) => {
-  try {
-    const flowId = parseInt(req.params.id);
-    const userId = req.query.userId ? parseInt(req.query.userId) : req.user.id;
+          if (!hasAccess) {
+            return {
+              success: false,
+              statusCode: 403,
+              message: "Недостатньо прав для доступу до цієї команди",
+            };
+          }
+        } else {
+          // Застосовуємо фільтр команди
+          options.teamIds = [teamId];
+        }
 
-    if (isNaN(flowId) || isNaN(userId)) {
-      return res.status(400).json({
-        success: false,
-        message: "Недійсні ID потоку або користувача",
-      });
+        return { success: true };
+
+      case "buyer":
+        // Перевірка явно вказаних користувачів
+        if (options.userIds || options.userId) {
+          const requestedUserIds = options.userIds || [options.userId];
+          const hasAccess = requestedUserIds.every((id) => id === userId);
+
+          if (!hasAccess) {
+            return {
+              success: false,
+              statusCode: 403,
+              message: "Недостатньо прав для доступу до цього користувача",
+            };
+          }
+        } else {
+          // Застосовуємо фільтр користувача
+          options.userIds = [userId];
+        }
+
+        return { success: true };
+
+      default:
+        return {
+          success: false,
+          statusCode: 403,
+          message: "Недостатньо прав доступу",
+        };
     }
-
-    const hasAccess = await flowModel.checkUserFlowAccess(flowId, userId);
-
-    res.json({
-      success: true,
-      data: { has_access: hasAccess },
-    });
   } catch (error) {
-    console.error("Помилка перевірки доступу:", error);
-    res.status(500).json({
+    console.error("Помилка застосування ролевих фільтрів:", error);
+    return {
       success: false,
-      message: "Внутрішня помилка сервера",
-      error: process.env.NODE_ENV === "development" ? error.message : undefined,
-    });
+      statusCode: 500,
+      message: "Внутрішня помилка сервера при перевірці прав доступу",
+    };
   }
 };
 
@@ -1222,25 +761,12 @@ module.exports = {
   createFlow,
   updateFlow,
   deleteFlow,
+  getFlowUsers,
+  getAllFlowsStats,
 
   // Операції зі статусом
   updateFlowStatus,
   updateFlowActiveStatus,
-  bulkUpdateFlowStatus,
-
-  // Робота з командами (нові методи)
-  getFlowsByTeam,
-  transferFlowToTeam,
-  getFlowStatsByTeams,
-  bulkTransferFlowsToTeam,
-
-  // Робота з користувачами
-  getFlowUsers,
-  addUserToFlow,
-  updateUserInFlow,
-  removeUserFromFlow,
-  getUserFlows,
-  checkUserFlowAccess,
 
   // Комунікації
   sendMessageToUser,
@@ -1248,11 +774,4 @@ module.exports = {
   getFlowCommunications,
   markMessageAsRead,
   getUnreadMessagesCount,
-
-  // Статистика
-  upsertFlowStats,
-  getFlowStats,
-  getTopUsersByMetric,
-  getAllFlowsStats,
-  getFlowStatsByPartners,
 };

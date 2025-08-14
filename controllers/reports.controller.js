@@ -1,8 +1,5 @@
 const requestModel = require("../models/request.model");
-const expenseModel = require("../models/expense.model");
-const agentModel = require("../models/agent.model");
-const { validationResult } = require("express-validator");
-const { isValid, parseISO } = require("date-fns");
+const { isValid } = require("date-fns");
 
 /**
  * Отримання статистики заявок за фінансовими менеджерами
@@ -286,5 +283,49 @@ exports.getRequestTypeSummary = async (req, res) => {
   } catch (err) {
     console.error("Помилка отримання зведення типів заявок:", err);
     res.status(500).json({ success: false, message: "Серверна помилка" });
+  }
+};
+
+/**
+ * Отримання статистики витрат за відділами
+ * @param {Object} req - Об'єкт запиту Express
+ * @param {Object} res - Об'єкт відповіді Express
+ */
+exports.getDepartmentExpenseStats = async (req, res) => {
+  try {
+    const { startDate, endDate } = req.query;
+
+    // Перевірка коректності параметрів
+    const errors = [];
+    if (startDate && isNaN(Date.parse(startDate))) {
+      errors.push({ param: "startDate", msg: "Невірний формат дати" });
+    }
+    if (endDate && isNaN(Date.parse(endDate))) {
+      errors.push({ param: "endDate", msg: "Невірний формат дати" });
+    }
+
+    if (errors.length > 0) {
+      return res.status(400).json({
+        success: false,
+        errors,
+      });
+    }
+
+    // Отримання даних
+    const stats = await requestModel.getDepartmentExpenseStats({
+      startDate: startDate ? new Date(startDate) : undefined,
+      endDate: endDate ? new Date(endDate) : undefined,
+    });
+
+    res.json({
+      success: true,
+      data: stats,
+    });
+  } catch (err) {
+    console.error("Помилка отримання статистики відділів:", err);
+    res.status(500).json({
+      success: false,
+      message: "Помилка сервера під час отримання статистики відділів",
+    });
   }
 };

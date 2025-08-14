@@ -16,9 +16,9 @@ router.use(authMiddleware);
 /**
  * ОСНОВНІ CRUD ОПЕРАЦІЇ З ПОТОКАМИ
  */
-
 router.get(
   "/",
+  roleMiddleware("admin", "teamlead", "bizdev", "buyer"),
   [
     query("page", "Номер сторінки має бути числом")
       .optional()
@@ -57,7 +57,7 @@ router.get(
  */
 router.get(
   "/stats/overview",
-  roleMiddleware("admin", "teamlead", "bizdev"),
+  roleMiddleware("admin", "teamlead", "bizdev", "buyer"),
   [
     query("dateFrom", "Недійсна дата початку").optional().isDate(),
     query("dateTo", "Недійсна дата завершення").optional().isDate(),
@@ -68,26 +68,30 @@ router.get(
     query("userIds", "userIds має бути масивом чисел")
       .optional()
       .custom((value) => {
-        if (typeof value === 'string') {
+        if (typeof value === "string") {
           // Якщо передано як рядок, розбиваємо по комах
-          const ids = value.split(',').map(id => parseInt(id.trim()));
-          return ids.every(id => Number.isInteger(id) && id > 0);
+          const ids = value.split(",").map((id) => parseInt(id.trim()));
+          return ids.every((id) => Number.isInteger(id) && id > 0);
         }
         if (Array.isArray(value)) {
-          return value.every(id => Number.isInteger(parseInt(id)) && parseInt(id) > 0);
+          return value.every(
+            (id) => Number.isInteger(parseInt(id)) && parseInt(id) > 0
+          );
         }
         return false;
       }),
     query("teamIds", "teamIds має бути масивом чисел")
       .optional()
       .custom((value) => {
-        if (typeof value === 'string') {
+        if (typeof value === "string") {
           // Якщо передано як рядок, розбиваємо по комах
-          const ids = value.split(',').map(id => parseInt(id.trim()));
-          return ids.every(id => Number.isInteger(id) && id > 0);
+          const ids = value.split(",").map((id) => parseInt(id.trim()));
+          return ids.every((id) => Number.isInteger(id) && id > 0);
         }
         if (Array.isArray(value)) {
-          return value.every(id => Number.isInteger(parseInt(id)) && parseInt(id) > 0);
+          return value.every(
+            (id) => Number.isInteger(parseInt(id)) && parseInt(id) > 0
+          );
         }
         return false;
       }),
@@ -99,24 +103,6 @@ router.get(
 );
 
 /**
- * @route   GET /api/flows/stats/by-partners
- * @desc    Отримання статистики потоків за партнерами
- * @access  Private/Admin/TeamLead/BizDev
- */
-router.get(
-  "/stats/by-partners",
-  roleMiddleware("admin", "teamlead", "bizdev"),
-  [
-    query("dateFrom", "Недійсна дата початку").optional().isDate(),
-    query("dateTo", "Недійсна дата завершення").optional().isDate(),
-    query("limit", "Ліміт має бути числом від 1 до 50")
-      .optional()
-      .isInt({ min: 1, max: 50 }),
-  ],
-  flowController.getFlowStatsByPartners
-);
-
-/**
  * @route   GET /api/flows/unread-count
  * @desc    Отримання кількості непрочитаних повідомлень користувача
  * @access  Private
@@ -125,29 +111,6 @@ router.get(
   "/unread-count",
   [query("flowId", "ID потоку має бути числом").optional().isInt()],
   flowController.getUnreadMessagesCount
-);
-
-/**
- * @route   GET /api/flows/user/:userId
- * @desc    Отримання потоків користувача
- * @access  Private
- */
-router.get(
-  "/user/:userId",
-  [
-    check("userId", "ID користувача має бути числом").isInt(),
-    query("status", "Недійсний статус")
-      .optional()
-      .isIn(["active", "paused", "stopped", "pending"]),
-    query("onlyActive", "onlyActive має бути булевим значенням")
-      .optional()
-      .isBoolean(),
-    query("limit", "Ліміт має бути числом від 1 до 100")
-      .optional()
-      .isInt({ min: 1, max: 100 }),
-    query("offset", "Offset має бути числом").optional().isInt({ min: 0 }),
-  ],
-  flowController.getUserFlows
 );
 
 /**
@@ -283,28 +246,6 @@ router.patch(
 );
 
 /**
- * @route   POST /api/flows/bulk-status-update
- * @desc    Масове оновлення статусу потоків
- * @access  Private/Admin/TeamLead
- */
-router.post(
-  "/bulk-status-update",
-  roleMiddleware("admin", "teamlead"),
-  [
-    check("flowIds", "Список ID потоків є обов'язковим").isArray({ min: 1 }),
-    check("flowIds.*", "Кожний ID потоку має бути числом").isInt(),
-    check("status", "Статус є обов'язковим").notEmpty(),
-    check("status", "Недійсний статус потоку").isIn([
-      "active",
-      "paused",
-      "stopped",
-      "pending",
-    ]),
-  ],
-  flowController.bulkUpdateFlowStatus
-);
-
-/**
  * РОБОТА З КОРИСТУВАЧАМИ ПОТОКІВ
  */
 
@@ -322,63 +263,6 @@ router.get(
       .isBoolean(),
   ],
   flowController.getFlowUsers
-);
-
-// Оновлена валідація для додавання користувача до потоку
-router.post(
-  '/:id/users',
-  roleMiddleware('admin', 'teamlead', 'bizdev'),
-  [
-    check('id', 'ID потоку має бути числом').isInt(),
-    check('user_id', 'ID користувача є обов\'язковим').isInt(),
-    check('status', 'Недійсний статус користувача').optional().isIn(['active', 'inactive', 'suspended']),
-    check('notes', 'Нотатки мають бути рядком').optional().isString()
-    // ВИДАЛЕНО валідацію percentage та individual_cpa
-  ],
-  flowController.addUserToFlow
-);
-
-// Оновлена валідація для оновлення користувача в потоці
-router.put(
-  '/:id/users/:userId',
-  roleMiddleware('admin', 'teamlead', 'bizdev'),
-  [
-    check('id', 'ID потоку має бути числом').isInt(),
-    check('userId', 'ID користувача має бути числом').isInt(),
-    check('status', 'Недійсний статус користувача').optional().isIn(['active', 'inactive', 'suspended']),
-    check('notes', 'Нотатки мають бути рядком').optional().isString()
-    // ВИДАЛЕНО валідацію percentage та individual_cpa
-  ],
-  flowController.updateUserInFlow
-);
-
-/**
- * @route   DELETE /api/flows/:id/users/:userId
- * @desc    Видалення користувача з потоку
- * @access  Private/Admin/TeamLead/BizDev
- */
-router.delete(
-  "/:id/users/:userId",
-  roleMiddleware("admin", "teamlead", "bizdev"),
-  [
-    check("id", "ID потоку має бути числом").isInt(),
-    check("userId", "ID користувача має бути числом").isInt(),
-  ],
-  flowController.removeUserFromFlow
-);
-
-/**
- * @route   GET /api/flows/:id/access-check
- * @desc    Перевірка доступу користувача до потоку
- * @access  Private
- */
-router.get(
-  "/:id/access-check",
-  [
-    check("id", "ID потоку має бути числом").isInt(),
-    query("userId", "ID користувача має бути числом").optional().isInt(),
-  ],
-  flowController.checkUserFlowAccess
 );
 
 /**
@@ -476,155 +360,6 @@ router.patch(
   "/messages/:messageId/read",
   [check("messageId", "ID повідомлення має бути числом").isInt()],
   flowController.markMessageAsRead
-);
-
-/**
- * СТАТИСТИКА ПОТОКІВ
- */
-
-/**
- * @route   GET /api/flows/:id/stats
- * @desc    Отримання статистики потоку за період
- * @access  Private
- */
-router.get(
-  "/:id/stats",
-  [
-    check("id", "ID потоку має бути числом").isInt(),
-    query("dateFrom", "Недійсна дата початку").optional().isDate(),
-    query("dateTo", "Недійсна дата завершення").optional().isDate(),
-    query("userId", "ID користувача має бути числом").optional().isInt(),
-    query("groupBy", "Недійсне групування")
-      .optional()
-      .isIn(["day", "week", "month"]),
-  ],
-  flowController.getFlowStats
-);
-
-/**
- * @route   POST /api/flows/:id/stats
- * @desc    Додавання/оновлення статистики потоку
- * @access  Private/Admin/TeamLead/BizDev
- */
-router.post(
-  "/:id/stats",
-  roleMiddleware("admin", "teamlead", "bizdev"),
-  [
-    check("id", "ID потоку має бути числом").isInt(),
-    check("user_id", "ID користувача має бути числом").optional().isInt(),
-    check("date_from", "Дата початку є обов'язковою").isDate(),
-    check("date_to", "Дата завершення є обов'язковою").isDate(),
-    check("clicks", "Кліки мають бути числом").optional().isInt({ min: 0 }),
-    check("conversions", "Конверсії мають бути числом")
-      .optional()
-      .isInt({ min: 0 }),
-    check("revenue", "Дохід має бути числом").optional().isFloat({ min: 0 }),
-    check("impressions", "Покази мають бути числом")
-      .optional()
-      .isInt({ min: 0 }),
-    check("leads", "Ліди мають бути числом").optional().isInt({ min: 0 }),
-  ],
-  flowController.upsertFlowStats
-);
-
-/**
- * @route   GET /api/flows/:id/top-users
- * @desc    Отримання топ користувачів потоку за метрикою
- * @access  Private/Admin/TeamLead/BizDev
- */
-router.get(
-  "/:id/top-users",
-  roleMiddleware("admin", "teamlead", "bizdev"),
-  [
-    check("id", "ID потоку має бути числом").isInt(),
-    query("metric", "Недійсна метрика")
-      .optional()
-      .isIn(["revenue", "conversions", "clicks", "leads"]),
-    query("dateFrom", "Недійсна дата початку").optional().isDate(),
-    query("dateTo", "Недійсна дата завершення").optional().isDate(),
-    query("limit", "Ліміт має бути числом від 1 до 50")
-      .optional()
-      .isInt({ min: 1, max: 50 }),
-  ],
-  flowController.getTopUsersByMetric
-);
-
-/**
- * ДОДАТКОВІ МАРШРУТИ ДЛЯ РОБОТИ З КОМАНДАМИ
- * Додати ці маршрути до flows.routes.js
- */
-
-/**
- * @route   GET /api/flows/team/:teamId
- * @desc    Отримання потоків команди
- * @access  Private/Admin/TeamLead
- */
-router.get(
-  "/team/:teamId",
-  roleMiddleware("admin", "teamlead"),
-  [
-    check("teamId", "ID команди має бути числом").isInt(),
-    query("status", "Недійсний статус")
-      .optional()
-      .isIn(["active", "paused", "stopped", "pending"]),
-    query("onlyActive", "onlyActive має бути булевим значенням")
-      .optional()
-      .isBoolean(),
-    query("limit", "Ліміт має бути числом від 1 до 100")
-      .optional()
-      .isInt({ min: 1, max: 100 }),
-    query("offset", "Offset має бути числом").optional().isInt({ min: 0 }),
-  ],
-  flowController.getFlowsByTeam
-);
-
-/**
- * @route   GET /api/flows/stats/by-teams
- * @desc    Отримання статистики потоків по командах
- * @access  Private/Admin/TeamLead
- */
-router.get(
-  "/stats/by-teams",
-  roleMiddleware("admin", "teamlead"),
-  [
-    query("dateFrom", "Недійсна дата початку").optional().isDate(),
-    query("dateTo", "Недійсна дата завершення").optional().isDate(),
-    query("onlyActive", "onlyActive має бути булевим значенням")
-      .optional()
-      .isBoolean(),
-  ],
-  flowController.getFlowStatsByTeams
-);
-
-/**
- * @route   PATCH /api/flows/:id/transfer-team
- * @desc    Перенесення потоку до іншої команди
- * @access  Private/Admin/TeamLead
- */
-router.patch(
-  "/:id/transfer-team",
-  roleMiddleware("admin", "teamlead"),
-  [
-    check("id", "ID потоку має бути числом").isInt(),
-    check("team_id", "ID команди є обов'язковим").isInt(),
-  ],
-  flowController.transferFlowToTeam
-);
-
-/**
- * @route   POST /api/flows/bulk-transfer-team
- * @desc    Масове перенесення потоків до команди
- * @access  Private/Admin/TeamLead
- */
-router.post(
-  "/bulk-transfer-team",
-  roleMiddleware("admin", "teamlead"),
-  [
-    check("flowIds", "Список ID потоків є обов'язковим").isArray({ min: 1 }),
-    check("flowIds.*", "Кожний ID потоку має бути числом").isInt(),
-    check("team_id", "ID команди є обов'язковим").isInt(),
-  ],
-  flowController.bulkTransferFlowsToTeam
 );
 
 module.exports = router;

@@ -105,34 +105,6 @@ const upsertFlowStat = async (data) => {
 };
 
 /**
- * Масове оновлення статистики (для оновлення декількох днів одночасно)
- * @param {Array<Object>} statsArray - Масив даних статистики
- * @param {number} updated_by - ID користувача, що оновлює
- * @returns {Promise<Array>} Масив оновлених записів
- */
-const bulkUpsertFlowStats = async (statsArray, updated_by) => {
-  const client = await db.getClient();
-
-  try {
-    await client.query("BEGIN");
-
-    const results = [];
-    for (const stat of statsArray) {
-      const result = await upsertFlowStat({ ...stat, updated_by });
-      results.push(result);
-    }
-
-    await client.query("COMMIT");
-    return results;
-  } catch (error) {
-    await client.query("ROLLBACK");
-    throw error;
-  } finally {
-    client.release();
-  }
-};
-
-/**
  * Отримання всіх потоків зі статистикою за певний день з фільтрацією за партнерами
  * @param {Object} options - Опції фільтрації
  * @param {number} options.year - Рік
@@ -2122,7 +2094,6 @@ const checkUserAccess = async (flow_id, user_id) => {
 
 module.exports = {
   upsertFlowStat,
-  bulkUpsertFlowStats,
   getDailyFlowsStats,
   getUserMonthlyStats,
   getTeamMonthlyStats,
