@@ -50,35 +50,6 @@ const createUserRequest = async (requestData) => {
 
     const newRequest = requestResult.rows[0];
 
-    // Додаємо автора до підписок
-    const subscriptionQuery = `
-      INSERT INTO bizdev_request_subscriptions (request_id, user_id)
-      VALUES ($1, $2)
-      ON CONFLICT (request_id, user_id) DO NOTHING
-    `;
-
-    await client.query(subscriptionQuery, [newRequest.id, created_by]);
-
-    // Якщо є призначений користувач, додаємо його до підписок
-    if (assigned_to && assigned_to !== created_by) {
-      await client.query(subscriptionQuery, [newRequest.id, assigned_to]);
-    }
-
-    // Додаємо початкове системне повідомлення
-    const initialMessageQuery = `
-      INSERT INTO bizdev_request_communications (
-        request_id, sender_id, message_type, message
-      )
-      VALUES ($1, $2, 'system', $3)
-    `;
-
-    const initialMessage = `Запит створено користувачем ${created_by}`;
-    await client.query(initialMessageQuery, [
-      newRequest.id,
-      created_by,
-      initialMessage,
-    ]);
-
     return await getRequestById(newRequest.id, client);
   });
 };
@@ -104,12 +75,12 @@ const getRequestById = async (requestId, client = null) => {
       updater.username as updated_by_username,
       updater.first_name as updated_by_first_name,
       updater.last_name as updated_by_last_name,
-      COUNT(rc.id) as communications_count
+      COUNT(cc.id) as communications_count
     FROM bizdev_requests ur
     LEFT JOIN users creator ON ur.created_by = creator.id
     LEFT JOIN users assignee ON ur.assigned_to = assignee.id
     LEFT JOIN users updater ON ur.updated_by = updater.id
-    LEFT JOIN bizdev_request_communications rc ON ur.id = rc.request_id
+    LEFT JOIN communication_contexts cc ON ur.id = cc.context_id AND context_type = 'bizdev_request'
     WHERE ur.id = $1
     GROUP BY ur.id, creator.id, assignee.id, updater.id
   `;
@@ -222,11 +193,11 @@ const getRequests = async (options = {}) => {
       assignee.username as assigned_to_username,
       assignee.first_name as assigned_to_first_name,
       assignee.last_name as assigned_to_last_name,
-      COUNT(rc.id) as communications_count
+      COUNT(cc.id) as communications_count
     FROM bizdev_requests ur
     LEFT JOIN users creator ON ur.created_by = creator.id
     LEFT JOIN users assignee ON ur.assigned_to = assignee.id
-    LEFT JOIN bizdev_request_communications rc ON ur.id = rc.request_id
+    LEFT JOIN communication_contexts cc ON ur.id = cc.context_id AND context_type = 'bizdev_request'
     ${whereClause}
     GROUP BY ur.id, creator.id, assignee.id
     ORDER BY ur.${sort_by} ${sort_order}
@@ -375,36 +346,6 @@ const updateRequest = async (requestId, updateData, updatedBy) => {
 
     await client.query(updateQuery, values);
 
-    // Додаємо системне повідомлення про оновлення
-    if (
-      assigned_to !== undefined &&
-      assigned_to !== currentRequest.assigned_to
-    ) {
-      const assignmentMessage = assigned_to
-        ? `Запит призначено користувачу ${assigned_to}`
-        : "Призначення запиту скасовано";
-
-      await client.query(
-        `
-        INSERT INTO bizdev_request_communications (request_id, sender_id, message_type, message)
-        VALUES ($1, $2, 'assignment', $3)
-      `,
-        [requestId, updatedBy, assignmentMessage]
-      );
-
-      // Додаємо нового призначеного до підписок
-      if (assigned_to) {
-        await client.query(
-          `
-          INSERT INTO bizdev_request_subscriptions (request_id, user_id)
-          VALUES ($1, $2)
-          ON CONFLICT (request_id, user_id) DO NOTHING
-        `,
-          [requestId, assigned_to]
-        );
-      }
-    }
-
     return await getRequestById(requestId, client);
   });
 };
@@ -450,34 +391,6 @@ const updateRequestStatus = async (
       await client.query("ROLLBACK");
       return null;
     }
-
-    // Додаємо системне повідомлення про зміну статусу
-    const communicationQuery = `
-      INSERT INTO bizdev_request_communications 
-      (request_id, sender_id, message_type, message, is_internal)
-      VALUES ($1::integer, $2::integer, $3::varchar, $4::text, $5::boolean)
-    `;
-
-    const statusMessages = {
-      pending: 'Запит переведено в статус "Очікування"',
-      in_progress: "Розпочато роботу над запитом",
-      completed: "Запит успішно завершено",
-      cancelled: "Запит скасовано",
-      on_hold: "Роботу над запитом призупинено",
-    };
-
-    let message = statusMessages[status] || `Статус змінено на "${status}"`;
-    if (reason) {
-      message += `. Причина: ${reason}`;
-    }
-
-    await client.query(communicationQuery, [
-      requestId,
-      updatedBy,
-      "system",
-      message,
-      false,
-    ]);
 
     await client.query("COMMIT");
 

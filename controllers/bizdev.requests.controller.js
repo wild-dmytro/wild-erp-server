@@ -13,12 +13,6 @@ const {
   getRequestsStats,
 } = require("../models/bizdev.requests.model");
 
-const {
-  addCommunication,
-  getRequestCommunications,
-  getCommunicationStats,
-} = require("../models/bizdev.communications.model");
-
 /**
  * Створення нового запиту
  * @route POST /api/requests
@@ -157,7 +151,6 @@ const getAllRequests = async (req, res) => {
 const getRequestDetails = async (req, res) => {
   try {
     const { id } = req.params;
-    const { include_communications = "false" } = req.query;
 
     const request = await getRequestById(parseInt(id));
 
@@ -169,19 +162,6 @@ const getRequestDetails = async (req, res) => {
     }
 
     let responseData = { request };
-
-    // Додаємо комунікацію якщо потрібно
-    if (include_communications === "true") {
-      const communications = await getRequestCommunications(parseInt(id), {
-        include_internal:
-          req.user.role === "admin" || req.user.role === "teamlead",
-      });
-
-      const communicationStats = await getCommunicationStats(parseInt(id));
-
-      responseData.communications = communications.communications;
-      responseData.communication_stats = communicationStats;
-    }
 
     res.json({
       success: true,

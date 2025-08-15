@@ -337,28 +337,9 @@ const getFlowById = async (id) => {
 
   const usersResult = await db.query(usersQuery, [id]);
 
-  // Отримуємо останні комунікації
-  const communicationsQuery = `
-    SELECT 
-      fc.*,
-      sender.username as sender_username,
-      CONCAT(sender.first_name, ' ', sender.last_name) as sender_name,
-      recipient.username as recipient_username,
-      CONCAT(recipient.first_name, ' ', recipient.last_name) as recipient_name
-    FROM flow_communications fc
-    JOIN users sender ON fc.sender_id = sender.id
-    LEFT JOIN users recipient ON fc.recipient_id = recipient.id
-    WHERE fc.flow_id = $1
-    ORDER BY fc.created_at DESC
-    LIMIT 10
-  `;
-
-  const communicationsResult = await db.query(communicationsQuery, [id]);
-
   return {
     ...flow,
-    users: usersResult.rows,
-    recent_communications: communicationsResult.rows,
+    users: usersResult.rows
   };
 };
 
@@ -624,10 +605,6 @@ const deleteFlow = async (id) => {
           [id]
         ),
         db.query(
-          "SELECT COUNT(*) as count FROM flow_communications WHERE flow_id = $1",
-          [id]
-        ),
-        db.query(
           "SELECT COUNT(*) as count FROM partner_payout_flows WHERE flow_id = $1",
           [id]
         ),
@@ -697,176 +674,6 @@ const getFlowUsers = async (flowId, onlyActive = false) => {
 
   const result = await db.query(query, [flowId]);
   return result.rows;
-};
-
-/**
- * Комунікації в потоці
- */
-
-/**
- * Надсилання повідомлення користувачеві в потоці
- * @param {Object} messageData - Дані повідомлення
- * @returns {Promise<Object>} Надіслане повідомлення
- */
-const sendMessageToUser = async (messageData) => {
-  const {
-    flow_id,
-    sender_id,
-    recipient_id,
-    message_type = "message",
-    subject,
-    message,
-    attachments,
-    priority = "normal",
-    is_urgent = false,
-  } = messageData;
-
-  const query = `
-    INSERT INTO flow_communications (
-      flow_id, sender_id, recipient_id, message_type, subject, 
-      message, attachments, priority, is_urgent
-    )
-    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
-    RETURNING *
-  `;
-
-  const result = await db.query(query, [
-    flow_id,
-    sender_id,
-    recipient_id,
-    message_type,
-    subject,
-    message,
-    JSON.stringify(attachments),
-    priority,
-    is_urgent,
-  ]);
-
-  return result.rows[0];
-};
-
-/**
- * Надсилання оповіщення всім користувачам потоку
- * @param {Object} notificationData - Дані оповіщення
- * @returns {Promise<Array>} Список надісланих повідомлень
- */
-const sendNotificationToAllUsers = async (notificationData) => {
-  const {
-    flow_id,
-    sender_id,
-    message_type = "notification",
-    subject,
-    message,
-    priority = "normal",
-    is_urgent = false,
-  } = notificationData;
-
-  // Отримуємо всіх активних користувачів потоку
-  const usersResult = await db.query(
-    "SELECT user_id FROM flow_users WHERE flow_id = $1 AND status = 'active'",
-    [flow_id]
-  );
-
-  const sentMessages = [];
-
-  for (const user of usersResult.rows) {
-    const messageResult = await db.query(
-      `
-      INSERT INTO flow_communications (
-        flow_id, sender_id, recipient_id, message_type, subject, 
-        message, priority, is_urgent
-      )
-      VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-      RETURNING *
-    `,
-      [
-        flow_id,
-        sender_id,
-        user.user_id,
-        message_type,
-        subject,
-        message,
-        priority,
-        is_urgent,
-      ]
-    );
-
-    sentMessages.push(messageResult.rows[0]);
-  }
-
-  return sentMessages;
-};
-
-/**
- * Отримання комунікацій потоку
- * @param {number} flowId - ID потоку
- * @param {Object} options - Опції фільтрації
- * @returns {Promise<Array>} Список комунікацій
- */
-const getFlowCommunications = async (flowId, options = {}) => {
-  const {
-    limit = 50,
-    offset = 0,
-    messageType,
-    unreadOnly = false,
-    recipientId,
-  } = options;
-
-  const conditions = ["fc.flow_id = $1"];
-  const params = [flowId];
-  let paramIndex = 2;
-
-  if (messageType) {
-    conditions.push(`fc.message_type = $${paramIndex++}`);
-    params.push(messageType);
-  }
-
-  if (unreadOnly) {
-    conditions.push(`fc.is_read = false`);
-  }
-
-  if (recipientId) {
-    conditions.push(`fc.recipient_id = $${paramIndex++}`);
-    params.push(recipientId);
-  }
-
-  const query = `
-    SELECT 
-      fc.*,
-      sender.username as sender_username,
-      CONCAT(sender.first_name, ' ', sender.last_name) as sender_name,
-      recipient.username as recipient_username,
-      CONCAT(recipient.first_name, ' ', recipient.last_name) as recipient_name
-    FROM flow_communications fc
-    JOIN users sender ON fc.sender_id = sender.id
-    LEFT JOIN users recipient ON fc.recipient_id = recipient.id
-    WHERE ${conditions.join(" AND ")}
-    ORDER BY fc.created_at DESC
-    LIMIT $${paramIndex++} OFFSET $${paramIndex}
-  `;
-
-  params.push(limit, offset);
-
-  const result = await db.query(query, params);
-  return result.rows;
-};
-
-/**
- * Позначення повідомлення як прочитаного
- * @param {number} messageId - ID повідомлення
- * @param {number} userId - ID користувача
- * @returns {Promise<Object|null>} Оновлене повідомлення або null
- */
-const markMessageAsRead = async (messageId, userId) => {
-  const query = `
-    UPDATE flow_communications
-    SET is_read = true, read_at = NOW()
-    WHERE id = $1 AND recipient_id = $2
-    RETURNING *
-  `;
-
-  const result = await db.query(query, [messageId, userId]);
-  return result.rows.length > 0 ? result.rows[0] : null;
 };
 
 /**
@@ -1078,32 +885,6 @@ const updateFlowActiveStatus = async (id, isActive, updatedBy) => {
 };
 
 /**
- * Отримання кількості непрочитаних повідомлень користувача
- * @param {number} userId - ID користувача
- * @param {number} flowId - ID потоку (опційно)
- * @returns {Promise<number>} Кількість непрочитаних повідомлень
- */
-const getUnreadMessagesCount = async (userId, flowId = null) => {
-  const conditions = ["fc.recipient_id = $1", "fc.is_read = false"];
-  const params = [userId];
-  let paramIndex = 2;
-
-  if (flowId) {
-    conditions.push(`fc.flow_id = ${paramIndex++}`);
-    params.push(flowId);
-  }
-
-  const query = `
-    SELECT COUNT(*) as unread_count
-    FROM flow_communications fc
-    WHERE ${conditions.join(" AND ")}
-  `;
-
-  const result = await db.query(query, params);
-  return parseInt(result.rows[0].unread_count);
-};
-
-/**
  * Валідація даних потоку
  * @param {Object} flowData - Дані потоку
  * @returns {Object} Результат валідації
@@ -1195,13 +976,6 @@ module.exports = {
   updateFlow,
   deleteFlow,
   getFlowUsers,
-
-  // Комунікації
-  sendMessageToUser,
-  sendNotificationToAllUsers,
-  getFlowCommunications,
-  markMessageAsRead,
-  getUnreadMessagesCount,
 
   getAllFlowsStats,
   updateFlowStatus,

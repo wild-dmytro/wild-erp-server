@@ -103,17 +103,6 @@ router.get(
 );
 
 /**
- * @route   GET /api/flows/unread-count
- * @desc    Отримання кількості непрочитаних повідомлень користувача
- * @access  Private
- */
-router.get(
-  "/unread-count",
-  [query("flowId", "ID потоку має бути числом").optional().isInt()],
-  flowController.getUnreadMessagesCount
-);
-
-/**
  * @route   GET /api/flows/:id
  * @desc    Отримання детальної інформації про потік за ID
  * @access  Private
@@ -263,103 +252,6 @@ router.get(
       .isBoolean(),
   ],
   flowController.getFlowUsers
-);
-
-/**
- * КОМУНІКАЦІЇ В ПОТОКАХ
- */
-
-/**
- * @route   GET /api/flows/:id/communications
- * @desc    Отримання комунікацій потоку
- * @access  Private
- */
-router.get(
-  "/:id/communications",
-  [
-    check("id", "ID потоку має бути числом").isInt(),
-    query("limit", "Ліміт має бути числом від 1 до 100")
-      .optional()
-      .isInt({ min: 1, max: 100 }),
-    query("offset", "Offset має бути числом").optional().isInt({ min: 0 }),
-    query("messageType", "Недійсний тип повідомлення")
-      .optional()
-      .isIn(["message", "notification", "announcement", "alert"]),
-    query("unreadOnly", "unreadOnly має бути булевим значенням")
-      .optional()
-      .isBoolean(),
-    query("recipientId", "ID отримувача має бути числом").optional().isInt(),
-  ],
-  flowController.getFlowCommunications
-);
-
-/**
- * @route   POST /api/flows/:id/messages
- * @desc    Надсилання повідомлення користувачеві в потоці
- * @access  Private/Admin/TeamLead/BizDev
- */
-router.post(
-  "/:id/messages",
-  roleMiddleware("admin", "teamlead", "bizdev"),
-  [
-    check("id", "ID потоку має бути числом").isInt(),
-    check("recipient_id", "ID отримувача є обов'язковим").isInt(),
-    check("message_type", "Недійсний тип повідомлення")
-      .optional()
-      .isIn(["message", "notification", "announcement", "alert"]),
-    check("subject", "Тема має бути рядком")
-      .optional()
-      .isString()
-      .isLength({ max: 255 }),
-    check("message", "Повідомлення є обов'язковим").notEmpty().isString(),
-    // check("priority", "Недійсний пріоритет")
-    //   .optional()
-    //   .isIn(["low", "normal", "high", "urgent"]),
-    check("is_urgent", "is_urgent має бути булевим значенням")
-      .optional()
-      .isBoolean(),
-    check("attachments", "Вкладення мають бути об'єктом").optional().isObject(),
-  ],
-  flowController.sendMessageToUser
-);
-
-/**
- * @route   POST /api/flows/:id/notifications
- * @desc    Надсилання оповіщення всім користувачам потоку
- * @access  Private/Admin/TeamLead/BizDev
- */
-router.post(
-  "/:id/notifications",
-  roleMiddleware("admin", "teamlead", "bizdev"),
-  [
-    check("id", "ID потоку має бути числом").isInt(),
-    check("message_type", "Недійсний тип повідомлення")
-      .optional()
-      .isIn(["notification", "announcement", "alert"]),
-    check("subject", "Тема має бути рядком")
-      .optional()
-      .isString()
-      .isLength({ max: 255 }),
-    check("message", "Повідомлення є обов'язковим").notEmpty().isString(),
-    // check("priority", "Недійсний пріоритет")
-    //   .optional()
-    //   .isIn(["low", "normal", "high", "urgent"]),
-    check("is_urgent", "is_urgent має бути булевим значенням")
-      .optional()
-      .isBoolean(),
-  ],
-  flowController.sendNotificationToAllUsers
-);
-
-/**
- * @route   PATCH /api/flows/messages/:messageId/read
- * @desc    Позначення повідомлення як прочитаного
- * @access  Private
- */
-router.patch(
-  "/messages/:messageId/read",
-  [check("messageId", "ID повідомлення має бути числом").isInt()],
-  flowController.markMessageAsRead
 );
 
 module.exports = router;
