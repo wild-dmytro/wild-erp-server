@@ -146,15 +146,15 @@ const getDailyFlowsStats = async (options = {}) => {
     const queryParams = [];
     let paramCounter = 1;
 
-    // Додаткові фільтри
-    if (onlyActive) {
-      whereConditions.push(`f.is_active = $${paramCounter++}`);
-      queryParams.push(true);
-    }
-
-    if (status) {
+    if (status && !onlyActive) {
       whereConditions.push(`f.status = $${paramCounter++}`);
       queryParams.push(status);
+    }
+
+    // Додаткові фільтри
+    if (onlyActive) {
+      whereConditions.push(`f.status = $${paramCounter++}`);
+      queryParams.push("active");
     }
 
     if (teamId) {

@@ -183,10 +183,6 @@ exports.getStatistics = async (req, res) => {
   try {
     const { startDate, endDate } = req.query;
 
-    console.log("statistics");
-    console.log(startDate);
-    console.log(endDate);
-
     // Перевірка коректності параметрів
     const errors = [];
 

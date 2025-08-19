@@ -766,10 +766,6 @@ const getStatistics = async ({ startDate, endDate }) => {
   let requestParamIndex = 1;
   let salaryParamIndex = 1;
 
-  console.log("iso statistics");
-  console.log(startDate);
-  console.log(endDate);
-
   // Фільтр за діапазоном дат для requests
   if (startDate && endDate) {
     // Створюємо початкову дату з часом 00:00:00.000
@@ -826,7 +822,8 @@ const getStatistics = async ({ startDate, endDate }) => {
     SELECT
       SUM(CASE WHEN r.request_type = 'agent_refill' THEN ar.amount ELSE 0 END) as total_agent_refill,
       SUM(CASE WHEN r.request_type = 'expenses' AND d.type = 'buying' THEN er.amount ELSE 0 END) as total_buying_expenses,
-      SUM(CASE WHEN r.request_type = 'expenses' AND (d.type IS NULL OR d.type != 'buying') THEN er.amount ELSE 0 END) as total_other_expenses
+      SUM(CASE WHEN r.request_type = 'expenses' AND (d.type IS NULL OR d.type != 'buying') THEN er.amount ELSE 0 END) as total_other_expenses,
+      SUM(CASE WHEN r.request_type = 'agent_refill' AND ar.fee_amount IS NOT NULL THEN ar.fee_amount ELSE NULL END) as total_fee_amount
     FROM
       requests r
     LEFT JOIN
@@ -858,6 +855,8 @@ const getStatistics = async ({ startDate, endDate }) => {
     total_agent_refill: 0,
     total_buying_expenses: 0,
     total_other_expenses: 0,
+    average_fee_percentage: 0,
+    total_fee_amount: 0,
   };
 
   const salariesData = salariesResult.rows[0] || {
@@ -872,6 +871,17 @@ const getStatistics = async ({ startDate, endDate }) => {
   const totalOtherExpenses = parseFloat(requestsData.total_other_expenses || 0);
   const totalSalaries = parseFloat(salariesData.total_salaries || 0);
 
+  const totalFeeAmount = parseFloat(requestsData.total_fee_amount || 0);
+
+  let averageFeePercentage;
+
+  if (requestsData.total_fee_amount) {
+    averageFeePercentage =
+      parseFloat(
+        requestsData.total_fee_amount / requestsData.total_agent_refill
+      ) * 100;
+  }
+
   // Загальна сума всіх чотирьох пунктів
   const totalAmount =
     totalAgentRefill + totalBuyingExpenses + totalOtherExpenses + totalSalaries;
@@ -882,6 +892,10 @@ const getStatistics = async ({ startDate, endDate }) => {
     totalOtherExpenses: totalOtherExpenses.toFixed(2),
     totalSalaries: totalSalaries.toFixed(2),
     totalAmount: totalAmount.toFixed(2),
+    averageFeePercentage: averageFeePercentage
+      ? averageFeePercentage.toFixed(2)
+      : 0,
+    totalFeeAmount: totalFeeAmount.toFixed(2),
   };
 };
 
