@@ -199,10 +199,9 @@ router.post(
       }),
 
     check("spend_percentage_ranges.*.description")
+      .optional()
       .if(body("flow_type").equals("spend"))
-      .isString()
-      .notEmpty()
-      .withMessage("Опис діапазону є обов'язковим"),
+      .isString(),
 
     // Інші поля (без змін)
     check("status", "Недійсний статус потоку")

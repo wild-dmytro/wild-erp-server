@@ -406,10 +406,10 @@ const createFlow = async (flowData) => {
   } = flowData;
 
   // Валідація даних
-  const validation = validateFlowData(flowData);
-  if (!validation.isValid) {
-    throw new Error(`Помилка валідації: ${validation.errors.join(", ")}`);
-  }
+  // const validation = validateFlowData(flowData);
+  // if (!validation.isValid) {
+  //   throw new Error(`Помилка валідації: ${validation.errors.join(", ")}`);
+  // }
 
   const client = await db.getClient();
 
