@@ -1,6 +1,7 @@
 /**
  * Маршрути для роботи з потоками
- * Включає всі ендпоінти для CRUD операцій, роботи з користувачами, комунікаціями та статистикою
+ * ОНОВЛЕНО: додано підтримку типів потоків та KPI метрик
+ * Адаптовано наявні маршрути під нову логіку
  */
 
 const express = require("express");
@@ -8,13 +9,13 @@ const router = express.Router();
 const flowController = require("../controllers/flows.controller");
 const authMiddleware = require("../middleware/auth.middleware");
 const roleMiddleware = require("../middleware/role.middleware");
-const { check, query } = require("express-validator");
+const { check, query, body } = require("express-validator");
 
 // Застосовуємо middleware авторизації до всіх маршрутів
 router.use(authMiddleware);
 
 /**
- * ОСНОВНІ CRUD ОПЕРАЦІЇ З ПОТОКАМИ
+ * ОНОВЛЕНО: Отримання всіх потоків з додатковими фільтрами
  */
 router.get(
   "/",
@@ -29,8 +30,15 @@ router.get(
     query("offerId", "ID оффера має бути числом").optional().isInt(),
     query("userId", "ID користувача має бути числом").optional().isInt(),
     query("geoId", "ID гео має бути числом").optional().isInt(),
-    query("teamId", "ID команди має бути числом").optional().isInt(), // ДОДАНО
+    query("teamId", "ID команди має бути числом").optional().isInt(),
     query("partnerId", "ID партнера має бути числом").optional().isInt(),
+    // ДОДАНО: фільтри за типом потоку та метрикою KPI
+    query("flow_type", "Тип потоку має бути cpa або spend")
+      .optional()
+      .isIn(["cpa", "spend"]),
+    query("kpi_metric", "Метрика KPI має бути одна з: OAS, CPD, RD, URD")
+      .optional()
+      .isIn(["OAS", "CPD", "RD", "URD"]),
     query("status", "Недійсний статус")
       .optional()
       .isIn(["active", "paused", "stopped", "pending"]),
@@ -51,9 +59,7 @@ router.get(
 );
 
 /**
- * @route   GET /api/flows/stats/overview
- * @desc    Отримання загальної статистики всіх потоків
- * @access  Private/Admin/TeamLead
+ * ОНОВЛЕНО: Отримання загальної статистики всіх потоків з фільтрами за типами
  */
 router.get(
   "/stats/overview",
@@ -65,6 +71,13 @@ router.get(
       .optional()
       .isIn(["active", "paused", "stopped", "pending"]),
     query("partnerId", "ID партнера має бути числом").optional().isInt(),
+    // ДОДАНО: фільтри за типом потоку та метрикою KPI
+    query("flow_type", "Тип потоку має бути cpa або spend")
+      .optional()
+      .isIn(["cpa", "spend"]),
+    query("kpi_metric", "Метрика KPI має бути одна з: OAS, CPD, RD, URD")
+      .optional()
+      .isIn(["OAS", "CPD", "RD", "URD"]),
     query("userIds", "userIds має бути масивом чисел")
       .optional()
       .custom((value) => {
@@ -103,9 +116,7 @@ router.get(
 );
 
 /**
- * @route   GET /api/flows/:id
- * @desc    Отримання детальної інформації про потік за ID
- * @access  Private
+ * Отримання детальної інформації про потік за ID (без змін)
  */
 router.get(
   "/:id",
@@ -113,7 +124,9 @@ router.get(
   flowController.getFlowById
 );
 
-// Оновлена валідація для створення потоку
+/**
+ * ОНОВЛЕНО: Створення потоку з підтримкою типів та KPI
+ */
 router.post(
   "/",
   roleMiddleware("admin", "teamlead", "bizdev"),
@@ -126,6 +139,72 @@ router.post(
     check("offer_id", "ID оффера є обов'язковим").isInt(),
     check("geo_id", "ID гео має бути числом").optional().isInt(),
     check("team_id", "ID команди має бути числом").optional().isInt(),
+
+    // ДОДАНО: валідація нових полів
+    check("flow_type", "Тип потоку є обов'язковим")
+      .isIn(["cpa", "spend"])
+      .withMessage("Тип потоку має бути cpa або spend"),
+    check("kpi_metric", "Метрика KPI є обов'язковою")
+      .isIn(["OAS", "CPD", "RD", "URD"])
+      .withMessage("Метрика KPI має бути одна з: OAS, CPD, RD, URD"),
+
+    // Умовна валідація для CPA потоків
+    check("kpi_target_value")
+      .if(body("flow_type").equals("cpa"))
+      .isNumeric()
+      .withMessage(
+        "Для CPA потоків необхідно вказати числове цільове значення KPI"
+      )
+      .custom((value) => {
+        if (value < 0) {
+          throw new Error("Цільове значення KPI не може бути від'ємним");
+        }
+        return true;
+      }),
+
+    // Умовна валідація для SPEND потоків
+    check("spend_percentage_ranges")
+      .if(body("flow_type").equals("spend"))
+      .isArray({ min: 1 })
+      .withMessage("Для SPEND потоків необхідно вказати масив діапазонів"),
+
+    check("spend_percentage_ranges.*.min_percentage")
+      .if(body("flow_type").equals("spend"))
+      .isNumeric()
+      .withMessage("min_percentage має бути числом")
+      .custom((value) => {
+        if (value < 0) {
+          throw new Error("min_percentage не може бути від'ємним");
+        }
+        return true;
+      }),
+
+    check("spend_percentage_ranges.*.max_percentage")
+      .if(body("flow_type").equals("spend"))
+      .optional({ nullable: true })
+      .isNumeric()
+      .withMessage("max_percentage має бути числом або null"),
+
+    check("spend_percentage_ranges.*.spend_multiplier")
+      .if(body("flow_type").equals("spend"))
+      .isNumeric()
+      .withMessage(
+        "spend_multiplier має бути числом (множник, наприклад 1.0 для 100%)"
+      )
+      .custom((value) => {
+        if (value < 0) {
+          throw new Error("spend_multiplier не може бути від'ємним");
+        }
+        return true;
+      }),
+
+    check("spend_percentage_ranges.*.description")
+      .if(body("flow_type").equals("spend"))
+      .isString()
+      .notEmpty()
+      .withMessage("Опис діапазону є обов'язковим"),
+
+    // Інші поля (без змін)
     check("status", "Недійсний статус потоку")
       .optional()
       .isIn(["active", "paused", "stopped", "pending"]),
@@ -143,12 +222,14 @@ router.post(
     check("notes", "Нотатки мають бути рядком").optional().isString(),
     check("cap", "Cap має бути рядком").optional().isString(),
     check("kpi", "KPI має бути рядком").optional().isString(),
-    check("landings", "Landings має бути рядком").optional().isString(), // ДОДАНО
+    check("landings", "Landings має бути рядком").optional().isString(),
   ],
   flowController.createFlow
 );
 
-// Оновлена валідація для оновлення потоку
+/**
+ * ОНОВЛЕНО: Оновлення потоку з підтримкою нових полів
+ */
 router.put(
   "/:id",
   roleMiddleware("admin", "teamlead", "bizdev"),
@@ -160,6 +241,21 @@ router.put(
     check("offer_id", "ID оффера має бути числом").optional().isInt(),
     check("geo_id", "ID гео має бути числом").optional().isInt(),
     check("team_id", "ID команди має бути числом").optional().isInt(),
+
+    // ДОДАНО: валідація нових полів (опціональна для оновлення)
+    check("flow_type", "Тип потоку має бути cpa або spend")
+      .optional()
+      .isIn(["cpa", "spend"]),
+    check("kpi_metric", "Метрика KPI має бути одна з: OAS, CPD, RD, URD")
+      .optional()
+      .isIn(["OAS", "CPD", "RD", "URD"]),
+    check("kpi_target_value", "Цільове значення KPI має бути числом")
+      .optional()
+      .isNumeric(),
+    check("spend_percentage_ranges", "Діапазони мають бути масивом")
+      .optional()
+      .isArray(),
+
     check("status", "Недійсний статус потоку")
       .optional()
       .isIn(["active", "paused", "stopped", "pending"]),
@@ -177,15 +273,13 @@ router.put(
     check("notes", "Нотатки мають бути рядком").optional().isString(),
     check("cap", "Cap має бути рядком").optional().isString(),
     check("kpi", "KPI має бути рядком").optional().isString(),
-    check("landings", "Landings має бути рядком").optional().isString(), // ДОДАНО
+    check("landings", "Landings має бути рядком").optional().isString(),
   ],
   flowController.updateFlow
 );
 
 /**
- * @route   DELETE /api/flows/:id
- * @desc    Видалення потоку
- * @access  Private/Admin/TeamLead
+ * Видалення потоку (без змін)
  */
 router.delete(
   "/:id",
@@ -195,13 +289,7 @@ router.delete(
 );
 
 /**
- * ОПЕРАЦІЇ ЗІ СТАТУСОМ ПОТОКІВ
- */
-
-/**
- * @route   PATCH /api/flows/:id/status
- * @desc    Оновлення статусу потоку
- * @access  Private/Admin/TeamLead/BizDev
+ * ОПЕРАЦІЇ ЗІ СТАТУСОМ ПОТОКІВ (без змін)
  */
 router.patch(
   "/:id/status",
@@ -219,11 +307,6 @@ router.patch(
   flowController.updateFlowStatus
 );
 
-/**
- * @route   PATCH /api/flows/:id/active
- * @desc    Оновлення активності потоку
- * @access  Private/Admin/TeamLead/BizDev
- */
 router.patch(
   "/:id/active",
   roleMiddleware("admin", "teamlead", "bizdev"),
@@ -235,13 +318,7 @@ router.patch(
 );
 
 /**
- * РОБОТА З КОРИСТУВАЧАМИ ПОТОКІВ
- */
-
-/**
- * @route   GET /api/flows/:id/users
- * @desc    Отримання користувачів потоку
- * @access  Private
+ * РОБОТА З КОРИСТУВАЧАМИ ПОТОКІВ (без змін)
  */
 router.get(
   "/:id/users",

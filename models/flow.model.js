@@ -1,19 +1,29 @@
 /**
  * Модель для роботи з потоками (flows)
- * Включає всі CRUD операції, роботу з користувачами, комунікації та статистику
- * Додано підтримку team_id
+ * Оновлено для підтримки типів потоків (cpa/spend) та KPI метрик
+ * Адаптовано наявні методи під нову логіку
  */
 
 const db = require("../config/db");
 
 /**
- * Основні CRUD операції з потоками
+ * Константи для типів потоків та метрик
  */
+const FLOW_TYPES = {
+  CPA: "cpa",
+  SPEND: "spend",
+};
+
+const KPI_METRICS = {
+  OAS: "OAS",
+  CPD: "CPD",
+  RD: "RD",
+  URD: "URD",
+};
 
 /**
  * Отримання всіх потоків з пагінацією та фільтрацією
- * @param {Object} options - Опції фільтрації та пагінації
- * @returns {Promise<Object>} Список потоків з метаданими та даними користувачів
+ * ОНОВЛЕНО: додано поля flow_type, kpi_metric, kpi_target_value, spend_percentage_ranges
  */
 const getAllFlows = async (options = {}) => {
   const {
@@ -37,6 +47,9 @@ const getAllFlows = async (options = {}) => {
     onlyActive,
     search,
     currency,
+    // ДОДАНО: фільтри за типом та метрикою
+    flow_type,
+    kpi_metric,
     sortBy = "created_at",
     sortOrder = "desc",
     startDate,
@@ -117,6 +130,17 @@ const getAllFlows = async (options = {}) => {
     params.push(currency);
   }
 
+  // ДОДАНО: фільтри за типом потоку та метрикою KPI
+  if (flow_type) {
+    conditions.push(`f.flow_type = $${paramIndex++}`);
+    params.push(flow_type);
+  }
+
+  if (kpi_metric) {
+    conditions.push(`f.kpi_metric = $${paramIndex++}`);
+    params.push(kpi_metric);
+  }
+
   if (startDate) {
     conditions.push(`f.created_at >= $${paramIndex++}`);
     params.push(startDate);
@@ -131,12 +155,12 @@ const getAllFlows = async (options = {}) => {
   if (search) {
     const searchParam = `%${search}%`;
     conditions.push(`(
-      f.name ILIKE $${paramIndex} OR 
-      f.description ILIKE $${paramIndex} OR 
-      o.name ILIKE $${paramIndex} OR
-      g.name ILIKE $${paramIndex} OR
-      tm.name ILIKE $${paramIndex} OR
-      b.name ILIKE $${paramIndex}
+      f.name ILIKE ${paramIndex} OR 
+      f.description ILIKE ${paramIndex} OR 
+      o.name ILIKE ${paramIndex} OR
+      g.name ILIKE ${paramIndex} OR
+      tm.name ILIKE ${paramIndex} OR
+      b.name ILIKE ${paramIndex}
     )`);
     params.push(searchParam);
     paramIndex++;
@@ -148,7 +172,7 @@ const getAllFlows = async (options = {}) => {
   // Зберігаємо базові параметри для count запиту
   const baseParams = [...params];
 
-  // Запит для отримання даних з додаванням team і brand інформації
+  // ОНОВЛЕНО: Запит для отримання даних з новими полями
   const dataQuery = `
     SELECT 
       f.id,
@@ -172,6 +196,11 @@ const getAllFlows = async (options = {}) => {
       f.updated_at,
       f.created_by,
       f.updated_by,
+      -- ДОДАНО: нові поля для типів та KPI
+      f.flow_type,
+      f.kpi_metric,
+      f.kpi_target_value,
+      f.spend_percentage_ranges,
       
       -- Інформація про офер
       o.name as offer_name,
@@ -277,21 +306,24 @@ const getAllFlows = async (options = {}) => {
 };
 
 /**
- * Отримання потоку за ID з повною інформацією
- * @param {number} id - ID потоку
- * @returns {Promise<Object|null>} Дані потоку або null
+ * ОНОВЛЕНО: Отримання потоку за ID з повною інформацією включно з новими полями
  */
 const getFlowById = async (id) => {
   const query = `
     SELECT 
       f.*,
+      -- ДОДАНО: нові поля для типів та KPI
+      f.flow_type,
+      f.kpi_metric,
+      f.kpi_target_value,
+      f.spend_percentage_ranges,
+      
       o.name as offer_name,
       o.conditions as offer_conditions,
       o.kpi as offer_kpi,
       g.name as geo_name,
       g.country_code as geo_code,
       tm.name as team_name,
-      tm.is_active as team_is_active,
       p.name as partner_name,
       p.type as partner_type,
       p.contact_email as partner_email,
@@ -339,14 +371,12 @@ const getFlowById = async (id) => {
 
   return {
     ...flow,
-    users: usersResult.rows
+    users: usersResult.rows,
   };
 };
 
 /**
- * Створення нового потоку (ВИПРАВЛЕНО - додано landings, видалено percentage та individual_cpa з users)
- * @param {Object} flowData - Дані потоку
- * @returns {Promise<Object>} Створений потік
+ * ОНОВЛЕНО: Створення нового потоку з підтримкою типів та KPI
  */
 const createFlow = async (flowData) => {
   const {
@@ -354,6 +384,11 @@ const createFlow = async (flowData) => {
     offer_id,
     geo_id,
     team_id,
+    // ДОДАНО: нові поля
+    flow_type,
+    kpi_metric,
+    kpi_target_value,
+    spend_percentage_ranges,
     status = "active",
     cpa = 0,
     currency = "USD",
@@ -370,6 +405,12 @@ const createFlow = async (flowData) => {
     users = [],
   } = flowData;
 
+  // Валідація даних
+  const validation = validateFlowData(flowData);
+  if (!validation.isValid) {
+    throw new Error(`Помилка валідації: ${validation.errors.join(", ")}`);
+  }
+
   const client = await db.getClient();
 
   try {
@@ -385,13 +426,14 @@ const createFlow = async (flowData) => {
       throw new Error("Потік з такою назвою вже існує");
     }
 
-    // Створюємо потік з полем landings
+    // ОНОВЛЕНО: Створюємо потік з новими полями
     const flowQuery = `
       INSERT INTO flows (
-        name, offer_id, geo_id, team_id, status, cpa, currency, is_active,
-        start_date, stop_date, conditions, description, notes, cap, kpi, landings, created_by
+        name, offer_id, geo_id, team_id, flow_type, kpi_metric,
+        kpi_target_value, spend_percentage_ranges, status, cpa, currency, is_active,
+        start_date, stop_date, conditions, description, notes, cap, kpi, landings, created_by, updated_by
       )
-      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $21)
       RETURNING *
     `;
 
@@ -400,6 +442,10 @@ const createFlow = async (flowData) => {
       offer_id,
       geo_id,
       team_id,
+      flow_type,
+      kpi_metric,
+      kpi_target_value || null,
+      spend_percentage_ranges ? JSON.stringify(spend_percentage_ranges) : null,
       status,
       cpa,
       currency,
@@ -417,7 +463,7 @@ const createFlow = async (flowData) => {
 
     const newFlow = flowResult.rows[0];
 
-    // Додаємо користувачів до потоку БЕЗ percentage та individual_cpa
+    // Додаємо користувачів до потоку
     if (users.length > 0) {
       for (const user of users) {
         await client.query(
@@ -446,10 +492,7 @@ const createFlow = async (flowData) => {
 };
 
 /**
- * Оновлення потоку (ВИПРАВЛЕНО - додано landings)
- * @param {number} id - ID потоку
- * @param {Object} flowData - Дані для оновлення
- * @returns {Promise<Object|null>} Оновлений потік або null
+ * ОНОВЛЕНО: Оновлення потоку з підтримкою нових полів
  */
 const updateFlow = async (id, flowData) => {
   const {
@@ -457,6 +500,11 @@ const updateFlow = async (id, flowData) => {
     offer_id,
     geo_id,
     team_id,
+    // ДОДАНО: нові поля
+    flow_type,
+    kpi_metric,
+    kpi_target_value,
+    spend_percentage_ranges,
     status,
     cpa,
     currency,
@@ -504,6 +552,29 @@ const updateFlow = async (id, flowData) => {
   if (team_id !== undefined) {
     setClauses.push(`team_id = $${paramIndex++}`);
     values.push(team_id);
+  }
+
+  // ДОДАНО: оновлення нових полів
+  if (flow_type !== undefined) {
+    setClauses.push(`flow_type = $${paramIndex++}`);
+    values.push(flow_type);
+  }
+
+  if (kpi_metric !== undefined) {
+    setClauses.push(`kpi_metric = $${paramIndex++}`);
+    values.push(kpi_metric);
+  }
+
+  if (kpi_target_value !== undefined) {
+    setClauses.push(`kpi_target_value = $${paramIndex++}`);
+    values.push(kpi_target_value);
+  }
+
+  if (spend_percentage_ranges !== undefined) {
+    setClauses.push(`spend_percentage_ranges = $${paramIndex++}`);
+    values.push(
+      spend_percentage_ranges ? JSON.stringify(spend_percentage_ranges) : null
+    );
   }
 
   if (status !== undefined) {
@@ -591,9 +662,7 @@ const updateFlow = async (id, flowData) => {
 };
 
 /**
- * Видалення потоку
- * @param {number} id - ID потоку
- * @returns {Promise<Object>} Результат видалення
+ * Видалення потоку (без змін)
  */
 const deleteFlow = async (id) => {
   try {
@@ -643,14 +712,7 @@ const deleteFlow = async (id) => {
 };
 
 /**
- * Робота з користувачами потоку
- */
-
-/**
- * Отримання користувачів потоку
- * @param {number} flowId - ID потоку
- * @param {boolean} onlyActive - Тільки активні користувачі
- * @returns {Promise<Array>} Список користувачів
+ * Отримання користувачів потоку (без змін)
  */
 const getFlowUsers = async (flowId, onlyActive = false) => {
   const query = `
@@ -677,38 +739,35 @@ const getFlowUsers = async (flowId, onlyActive = false) => {
 };
 
 /**
- * Статистика потоків
- */
-
-/**
- * Отримання загальної статистики всіх потоків
- * @param {Object} options - Опції фільтрації
- * @param {string} [options.dateFrom] - Дата початку
- * @param {string} [options.dateTo] - Дата завершення
- * @param {string} [options.status] - Статус потоків
- * @param {number} [options.partnerId] - ID партнера
- * @param {Array<number>} [options.userIds] - Масив ID користувачів
- * @param {Array<number>} [options.teamIds] - Масив ID команд
- * @param {boolean} [options.onlyActive] - Тільки активні потоки
- * @returns {Promise<Object>} Загальна статистика
+ * ОНОВЛЕНО: Отримання загальної статистики всіх потоків з урахуванням типів
  */
 const getAllFlowsStats = async (options = {}) => {
-  const { dateFrom, dateTo, status, partnerId, userIds, teamIds, onlyActive } =
-    options;
+  const {
+    dateFrom,
+    dateTo,
+    status,
+    partnerId,
+    userIds,
+    teamIds,
+    onlyActive,
+    // ДОДАНО: фільтри за типом
+    flow_type,
+    kpi_metric,
+  } = options;
 
   // Будуємо умови фільтрації
   const conditions = [];
   const params = [];
   let paramIndex = 1;
 
-  console.log(onlyActive)
+  console.log(onlyActive);
 
   // Фільтр за активністю
   if (onlyActive) {
     conditions.push("f.is_active = true");
   }
 
-  console.log(conditions)
+  console.log(conditions);
 
   // Фільтр за статусом (якщо вказано)
   if (status) {
@@ -720,6 +779,17 @@ const getAllFlowsStats = async (options = {}) => {
   if (partnerId) {
     conditions.push(`o.partner_id = $${paramIndex++}`);
     params.push(partnerId);
+  }
+
+  // ДОДАНО: фільтри за типом потоку та метрикою
+  if (flow_type) {
+    conditions.push(`f.flow_type = $${paramIndex++}`);
+    params.push(flow_type);
+  }
+
+  if (kpi_metric) {
+    conditions.push(`f.kpi_metric = $${paramIndex++}`);
+    params.push(kpi_metric);
   }
 
   // Фільтр за користувачами
@@ -754,7 +824,7 @@ const getAllFlowsStats = async (options = {}) => {
     conditions.length > 0 ? `WHERE ${conditions.join(" AND ")}` : "";
 
   try {
-    // Основний запит для отримання всіх метрик
+    // ОНОВЛЕНО: Основний запит для отримання всіх метрик включно з типами
     const statsQuery = `
       SELECT 
         -- Загальна кількість потоків
@@ -766,14 +836,22 @@ const getAllFlowsStats = async (options = {}) => {
         COUNT(DISTINCT f.id) FILTER (WHERE f.status = 'stopped') as stopped_flows,
         COUNT(DISTINCT f.id) FILTER (WHERE f.status = 'archived') as archived_flows,
         
+        -- ДОДАНО: Потоки за типами
+        COUNT(DISTINCT f.id) FILTER (WHERE f.flow_type = 'cpa') as cpa_flows,
+        COUNT(DISTINCT f.id) FILTER (WHERE f.flow_type = 'spend') as spend_flows,
+        
+        -- ДОДАНО: Потоки за метриками KPI
+        COUNT(DISTINCT f.id) FILTER (WHERE f.kpi_metric = 'OAS') as oas_flows,
+        COUNT(DISTINCT f.id) FILTER (WHERE f.kpi_metric = 'CPD') as cpd_flows,
+        COUNT(DISTINCT f.id) FILTER (WHERE f.kpi_metric = 'RD') as rd_flows,
+        COUNT(DISTINCT f.id) FILTER (WHERE f.kpi_metric = 'URD') as urd_flows,
+        
         -- Унікальні значення
         COUNT(DISTINCT f.offer_id) FILTER (WHERE f.offer_id IS NOT NULL) as unique_offers,
         COUNT(DISTINCT f.geo_id) FILTER (WHERE f.geo_id IS NOT NULL) as unique_geos,
         COUNT(DISTINCT o.brand_id) FILTER (WHERE o.brand_id IS NOT NULL) as unique_brands,
         COUNT(DISTINCT fu.user_id) FILTER (WHERE fu.user_id IS NOT NULL AND fu.status = 'active') as total_users,
         
-        -- Додаткові метрики
-        AVG(f.cpa) FILTER (WHERE f.cpa > 0) as average_cpa,
         COUNT(DISTINCT f.team_id) FILTER (WHERE f.team_id IS NOT NULL) as unique_teams
         
       FROM flows f
@@ -787,7 +865,7 @@ const getAllFlowsStats = async (options = {}) => {
     const result = await db.query(statsQuery, params);
     const stats = result.rows[0];
 
-    // Форматуємо результат
+    // ОНОВЛЕНО: Форматуємо результат з новими полями
     const formattedStats = {
       // Загальна кількість
       totalFlows: parseInt(stats.total_flows) || 0,
@@ -798,22 +876,24 @@ const getAllFlowsStats = async (options = {}) => {
       stoppedFlows: parseInt(stats.stopped_flows) || 0,
       archivedFlows: parseInt(stats.archived_flows) || 0,
 
+      // ДОДАНО: Потоки за типами
+      cpaFlows: parseInt(stats.cpa_flows) || 0,
+      spendFlows: parseInt(stats.spend_flows) || 0,
+
+      // ДОДАНО: Потоки за метриками KPI
+      kpiMetricsUsage: {
+        OAS: parseInt(stats.oas_flows) || 0,
+        CPD: parseInt(stats.cpd_flows) || 0,
+        RD: parseInt(stats.rd_flows) || 0,
+        URD: parseInt(stats.urd_flows) || 0,
+      },
+
       // Унікальні значення
       uniqueOffers: parseInt(stats.unique_offers) || 0,
       uniqueGeos: parseInt(stats.unique_geos) || 0,
       uniqueBrands: parseInt(stats.unique_brands) || 0,
       totalUsers: parseInt(stats.total_users) || 0,
       uniqueTeams: parseInt(stats.unique_teams) || 0,
-
-      // Додаткові метрики
-      averageCpa: parseFloat(stats.average_cpa) || 0,
-
-      // Розрахункові метрики
-      averageEfficiency: calculateAverageEfficiency(
-        parseInt(stats.total_flows),
-        parseInt(stats.active_flows)
-      ),
-      flowsGrowth: null, // Можна додати пізніше якщо потрібен розрахунок росту
     };
 
     console.log("Статистика потоків з БД:", formattedStats);
@@ -823,35 +903,9 @@ const getAllFlowsStats = async (options = {}) => {
     throw new Error("Помилка бази даних при отриманні статистики потоків");
   }
 };
-/**
- * Розрахунок середньої ефективності
- * @param {number} totalFlows - Загальна кількість потоків
- * @param {number} activeFlows - Кількість активних потоків
- * @returns {number} Ефективність у відсотках
- */
-const calculateAverageEfficiency = (totalFlows, activeFlows) => {
-  if (totalFlows === 0) return 0;
-
-  // Базова ефективність на основі активних потоків
-  const baseEfficiency = (activeFlows / totalFlows) * 100;
-
-  // Додаємо бонус за кількість потоків (більше потоків = вища потенційна ефективність)
-  const volumeBonus = Math.min(totalFlows * 2, 25); // Максимум 25% бонусу
-
-  // Обмежуємо до 95% максимум
-  return Math.min(baseEfficiency + volumeBonus, 95);
-};
 
 /**
- * Допоміжні методи
- */
-
-/**
- * Оновлення статусу потоку
- * @param {number} id - ID потоку
- * @param {string} status - Новий статус
- * @param {number} updatedBy - ID користувача
- * @returns {Promise<Object|null>} Оновлений потік або null
+ * Оновлення статусу потоку (без змін)
  */
 const updateFlowStatus = async (id, status, updatedBy) => {
   const query = `
@@ -866,11 +920,7 @@ const updateFlowStatus = async (id, status, updatedBy) => {
 };
 
 /**
- * Оновлення активності потоку
- * @param {number} id - ID потоку
- * @param {boolean} isActive - Новий статус активності
- * @param {number} updatedBy - ID користувача
- * @returns {Promise<Object|null>} Оновлений потік або null
+ * Оновлення активності потоку (без змін)
  */
 const updateFlowActiveStatus = async (id, isActive, updatedBy) => {
   const query = `
@@ -884,91 +934,11 @@ const updateFlowActiveStatus = async (id, isActive, updatedBy) => {
   return result.rows.length > 0 ? result.rows[0] : null;
 };
 
-/**
- * Валідація даних потоку
- * @param {Object} flowData - Дані потоку
- * @returns {Object} Результат валідації
- */
-const validateFlowData = (flowData) => {
-  const errors = [];
-
-  if (!flowData.name || flowData.name.trim().length === 0) {
-    errors.push("Назва потоку є обов'язковою");
-  }
-
-  if (flowData.name && flowData.name.length > 255) {
-    errors.push("Назва потоку не може перевищувати 255 символів");
-  }
-
-  if (!flowData.offer_id) {
-    errors.push("Оффер є обов'язковим");
-  }
-
-  if (flowData.team_id && isNaN(parseInt(flowData.team_id))) {
-    errors.push("Недійсний ID команди");
-  }
-
-  if (flowData.cpa && flowData.cpa < 0) {
-    errors.push("CPA не може бути від'ємним");
-  }
-
-  if (
-    flowData.currency &&
-    !["USD", "EUR", "GBP", "UAH"].includes(flowData.currency)
-  ) {
-    errors.push("Недійсна валюта");
-  }
-
-  if (
-    flowData.status &&
-    !["active", "paused", "stopped", "pending"].includes(flowData.status)
-  ) {
-    errors.push("Недійсний статус потоку");
-  }
-
-  if (flowData.start_date && flowData.stop_date) {
-    const startDate = new Date(flowData.start_date);
-    const stopDate = new Date(flowData.stop_date);
-
-    if (stopDate <= startDate) {
-      errors.push("Дата завершення має бути пізніше дати початку");
-    }
-  }
-
-  // Валідація користувачів
-  if (flowData.users && Array.isArray(flowData.users)) {
-    let totalPercentage = 0;
-
-    for (const user of flowData.users) {
-      if (!user.user_id) {
-        errors.push("ID користувача є обов'язковим");
-      }
-
-      if (user.percentage && (user.percentage < 0 || user.percentage > 100)) {
-        errors.push("Відсоток має бути між 0 та 100");
-      }
-
-      if (user.individual_cpa && user.individual_cpa < 0) {
-        errors.push("Індивідуальний CPA не може бути від'ємним");
-      }
-
-      totalPercentage += user.percentage || 0;
-    }
-
-    if (totalPercentage > 100) {
-      errors.push(
-        `Загальний відсоток не може перевищувати 100%. Поточна сума: ${totalPercentage}%`
-      );
-    }
-  }
-
-  return {
-    isValid: errors.length === 0,
-    errors,
-  };
-};
-
 module.exports = {
+  // Константи
+  FLOW_TYPES,
+  KPI_METRICS,
+
   // Основні CRUD операції
   getAllFlows,
   getFlowById,
@@ -977,8 +947,8 @@ module.exports = {
   deleteFlow,
   getFlowUsers,
 
+  // Статистика
   getAllFlowsStats,
   updateFlowStatus,
   updateFlowActiveStatus,
-  validateFlowData,
 };

@@ -1,7 +1,7 @@
 /**
  * Контролер для роботи з потоками
- * Обробляє всі HTTP запити пов'язані з потоками
- * Додано підтримку team_id
+ * ОНОВЛЕНО: додано підтримку типів потоків та KPI метрик
+ * Адаптовано наявні методи під нову логіку
  */
 
 const { validationResult } = require("express-validator");
@@ -9,9 +9,6 @@ const flowModel = require("../models/flow.model");
 
 /**
  * Обробка помилок валідації
- * @param {Object} req - Об'єкт запиту
- * @param {Object} res - Об'єкт відповіді
- * @returns {boolean} true якщо є помилки валідації
  */
 const handleValidationErrors = (req, res) => {
   const errors = validationResult(req);
@@ -26,12 +23,8 @@ const handleValidationErrors = (req, res) => {
 };
 
 /**
- * Основні CRUD операції
- */
-
-/**
- * Отримання всіх потоків з фільтрацією та пагінацією
- * GET /api/flows
+ * ОНОВЛЕНО: Отримання всіх потоків з фільтрацією та пагінацією
+ * Додано підтримку фільтрації за типом потоку та метрикою KPI
  */
 const getAllFlows = async (req, res) => {
   try {
@@ -77,6 +70,10 @@ const getAllFlows = async (req, res) => {
         ? parseInt(req.query.partnerId)
         : undefined,
 
+      // ДОДАНО: фільтри за типом потоку та метрикою KPI
+      flow_type: req.query.flow_type,
+      kpi_metric: req.query.kpi_metric,
+
       status: req.query.status,
       onlyActive: req.query.onlyActive === "true",
       search: req.query.search,
@@ -113,8 +110,7 @@ const getAllFlows = async (req, res) => {
 };
 
 /**
- * Отримання потоку за ID
- * GET /api/flows/:id
+ * Отримання потоку за ID (без змін, але отримує нові поля автоматично)
  */
 const getFlowById = async (req, res) => {
   try {
@@ -151,8 +147,7 @@ const getFlowById = async (req, res) => {
 };
 
 /**
- * Створення нового потоку (ВИПРАВЛЕНО)
- * POST /api/flows
+ * ОНОВЛЕНО: Створення нового потоку з підтримкою типів та KPI
  */
 const createFlow = async (req, res) => {
   try {
@@ -162,6 +157,46 @@ const createFlow = async (req, res) => {
       ...req.body,
       created_by: req.user.id,
     };
+
+    // ДОДАНО: Додаткова валідація для різних типів потоків
+    if (flowData.flow_type === "spend") {
+      // Для spend типу перевіряємо наявність діапазонів
+      if (
+        !flowData.spend_percentage_ranges ||
+        !Array.isArray(flowData.spend_percentage_ranges)
+      ) {
+        return res.status(400).json({
+          success: false,
+          message: "Для типу 'spend' необхідно вказати діапазони процентів",
+        });
+      }
+
+      // Валідуємо множники (повинні бути числами, не процентами)
+      const invalidRanges = flowData.spend_percentage_ranges.filter(
+        (range) =>
+          typeof range.spend_multiplier !== "number" ||
+          range.spend_multiplier < 0
+      );
+
+      if (invalidRanges.length > 0) {
+        return res.status(400).json({
+          success: false,
+          message:
+            "spend_multiplier має бути числом >= 0 (множник, не проценти). Наприклад: 1.0 для 100%, 1.2 для 120%",
+        });
+      }
+    } else if (flowData.flow_type === "cpa") {
+      // Для cpa типу перевіряємо цільове значення
+      if (
+        flowData.kpi_target_value === undefined ||
+        flowData.kpi_target_value === null
+      ) {
+        return res.status(400).json({
+          success: false,
+          message: "Для типу 'cpa' необхідно вказати цільове значення KPI",
+        });
+      }
+    }
 
     const newFlow = await flowModel.createFlow(flowData);
 
@@ -182,15 +217,14 @@ const createFlow = async (req, res) => {
 
     res.status(500).json({
       success: false,
-      message: "Внутрішня помилка сервера",
+      message: error.message || "Внутрішня помилка сервера",
       error: process.env.NODE_ENV === "development" ? error.message : undefined,
     });
   }
 };
 
 /**
- * Оновлення потоку (ВИПРАВЛЕНО - додано landings)
- * PUT /api/flows/:id
+ * ОНОВЛЕНО: Оновлення потоку з підтримкою нових полів
  */
 const updateFlow = async (req, res) => {
   try {
@@ -205,10 +239,41 @@ const updateFlow = async (req, res) => {
       });
     }
 
+    // ДОДАНО: Отримуємо поточний потік для валідації змін типу
+    const existingFlow = await flowModel.getFlowById(flowId);
+    if (!existingFlow) {
+      return res.status(404).json({
+        success: false,
+        message: "Потік не знайдено",
+      });
+    }
+
     const flowData = {
       ...req.body,
       updated_by: req.user.id,
     };
+
+    // ДОДАНО: Валідація при зміні типу потоку
+    if (flowData.flow_type && flowData.flow_type !== existingFlow.flow_type) {
+      if (flowData.flow_type === "spend" && !flowData.spend_percentage_ranges) {
+        return res.status(400).json({
+          success: false,
+          message:
+            "При зміні типу на 'spend' необхідно вказати діапазони процентів",
+        });
+      }
+
+      if (
+        flowData.flow_type === "cpa" &&
+        flowData.kpi_target_value === undefined
+      ) {
+        return res.status(400).json({
+          success: false,
+          message:
+            "При зміні типу на 'cpa' необхідно вказати цільове значення KPI",
+        });
+      }
+    }
 
     const updatedFlow = await flowModel.updateFlow(flowId, flowData);
 
@@ -236,15 +301,14 @@ const updateFlow = async (req, res) => {
 
     res.status(500).json({
       success: false,
-      message: "Внутрішня помилка сервера",
+      message: error.message || "Внутрішня помилка сервера",
       error: process.env.NODE_ENV === "development" ? error.message : undefined,
     });
   }
 };
 
 /**
- * Видалення потоку
- * DELETE /api/flows/:id
+ * Видалення потоку (без змін)
  */
 const deleteFlow = async (req, res) => {
   try {
@@ -275,12 +339,7 @@ const deleteFlow = async (req, res) => {
 };
 
 /**
- * Операції зі статусом (існуючі методи залишаються без змін)
- */
-
-/**
- * Оновлення статусу потоку
- * PATCH /api/flows/:id/status
+ * Оновлення статусу потоку (без змін)
  */
 const updateFlowStatus = async (req, res) => {
   try {
@@ -325,8 +384,7 @@ const updateFlowStatus = async (req, res) => {
 };
 
 /**
- * Оновлення активності потоку
- * PATCH /api/flows/:id/active
+ * Оновлення активності потоку (без змін)
  */
 const updateFlowActiveStatus = async (req, res) => {
   try {
@@ -371,12 +429,7 @@ const updateFlowActiveStatus = async (req, res) => {
 };
 
 /**
- * Робота з користувачами потоку
- */
-
-/**
- * Отримання користувачів потоку
- * GET /api/flows/:id/users
+ * Отримання користувачів потоку (без змін)
  */
 const getFlowUsers = async (req, res) => {
   try {
@@ -407,8 +460,7 @@ const getFlowUsers = async (req, res) => {
 };
 
 /**
- * Отримання загальної статистики всіх потоків
- * GET /api/flows/stats/overview
+ * ОНОВЛЕНО: Отримання загальної статистики всіх потоків з підтримкою типів
  */
 const getAllFlowsStats = async (req, res) => {
   try {
@@ -442,6 +494,9 @@ const getAllFlowsStats = async (req, res) => {
       userIds: userIds && userIds.length > 0 ? userIds : undefined,
       teamIds: teamIds && teamIds.length > 0 ? teamIds : undefined,
       onlyActive: req.query.onlyActive == "true" ? true : false,
+      // ДОДАНО: фільтри за типом потоку та метрикою KPI
+      flow_type: req.query.flow_type,
+      kpi_metric: req.query.kpi_metric,
     };
 
     const roleCheck = await applyRoleFilters(req, options);
@@ -469,8 +524,7 @@ const getAllFlowsStats = async (req, res) => {
 };
 
 /**
- * УНІВЕРСАЛЬНА ФУНКЦІЯ ДЛЯ ЗАСТОСУВАННЯ РОЛЕВИХ ФІЛЬТРІВ
- * Можна використовувати в різних методах
+ * УНІВЕРСАЛЬНА ФУНКЦІЯ ДЛЯ ЗАСТОСУВАННЯ РОЛЕВИХ ФІЛЬТРІВ (без змін)
  */
 const applyRoleFilters = async (req, options) => {
   const userRole = req.userRole;
