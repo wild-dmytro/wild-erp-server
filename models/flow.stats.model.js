@@ -444,6 +444,7 @@ const checkUserAccess = async (flow_id, user_id, user_role) => {
 
 /**
  * ОНОВЛЕНО: Отримання статистики потоку з фільтрацією по користувачах
+ * Додано нові метрики: OAS, RD, URD, CPD та розрахунок прибутку
  */
 const getFlowStats = async (
   flow_id,
@@ -501,6 +502,19 @@ const getFlowStats = async (
 
   const whereClause = conditions.join(" AND ");
 
+  // ДОДАНО: Запит для отримання даних про потік (модель, метрики тощо)
+  const flowQuery = `
+    SELECT 
+      flow_type,
+      kpi_metric,
+      kpi_target_value,
+      spend_percentage_ranges,
+      cpa
+    FROM flows 
+    WHERE id = $1
+  `;
+
+  // Основний запит з додаванням нових метрик
   const query = `
     SELECT 
       fs.*,
@@ -509,6 +523,7 @@ const getFlowStats = async (
       u.last_name,
       CONCAT(u.first_name, ' ', u.last_name) as user_full_name,
       
+      -- Існуючі метрики
       CASE 
         WHEN fs.spend > 0 AND fs.deps > 0 AND fs.cpa > 0
         THEN ROUND(((fs.deps * fs.cpa - fs.spend) / fs.spend * 100)::numeric, 2)
@@ -523,7 +538,37 @@ const getFlowStats = async (
         WHEN fs.regs > 0 
         THEN ROUND((fs.deps::numeric / fs.regs * 100)::numeric, 2)
         ELSE 0 
-      END as reg2dep
+      END as reg2dep,
+      
+      -- ДОДАНО: Нові метрики
+      -- OAS - (deposit_amount / spend) * 100%
+      CASE 
+        WHEN fs.spend > 0 
+        THEN ROUND((fs.deposit_amount::numeric / fs.spend * 100)::numeric, 2)
+        ELSE 0 
+      END as oas,
+      
+      -- RD - (redep_count / deps) * 100%
+      CASE 
+        WHEN COALESCE(fs.verified_deps, fs.deps) > 0 
+        THEN ROUND((fs.redep_count::numeric / COALESCE(fs.verified_deps, fs.deps) * 100)::numeric, 2)
+        ELSE 0 
+      END as rd,
+      
+      -- URD - (unique_redep_count / deps) * 100%
+      CASE 
+        WHEN COALESCE(fs.verified_deps, fs.deps) > 0 
+        THEN ROUND((fs.unique_redep_count::numeric / COALESCE(fs.verified_deps, fs.deps) * 100)::numeric, 2)
+        ELSE 0 
+      END as urd,
+      
+      -- CPD - spend / deps
+      CASE 
+        WHEN COALESCE(fs.verified_deps, fs.deps) > 0 
+        THEN ROUND((fs.spend::numeric / COALESCE(fs.verified_deps, fs.deps))::numeric, 2)
+        ELSE 0 
+      END as cpd
+      
     FROM flow_stats fs
     JOIN users u ON fs.user_id = u.id
     WHERE ${whereClause}
@@ -531,11 +576,229 @@ const getFlowStats = async (
   `;
 
   try {
+    // Отримуємо дані про потік
+    const flowResult = await db.query(flowQuery, [flow_id]);
+    if (flowResult.rows.length === 0) {
+      throw new Error("Потік не знайдено");
+    }
+
+    const flowData = flowResult.rows[0];
+
+    // Отримуємо статистику
     const result = await db.query(query, params);
-    return result.rows;
+    const statsData = result.rows;
+
+    // ДОДАНО: Розрахунок прибутку
+    let statsWithProfit = [];
+
+    if (flowData.flow_type === "cpa") {
+      // CPA модель: просто розраховуємо для кожного рядка
+      statsWithProfit = statsData.map((row) => {
+        const depsForCalculation = row.verified_deps || row.deps || 0;
+        const profit = depsForCalculation * (flowData.cpa || 0);
+
+        return {
+          ...row,
+          profit: Math.round(profit * 100) / 100,
+        };
+      });
+    } else if (flowData.flow_type === "spend") {
+      // SPEND модель: спочатку отримуємо унікальні комбінації місяць/рік
+      const uniquePeriods = [
+        ...new Set(statsData.map((row) => `${row.year}-${row.month}`)),
+      ];
+
+      // Розраховуємо KPI для кожного унікального періоду
+      const monthlyKpiCache = {};
+
+      for (const period of uniquePeriods) {
+        const [year, month] = period.split("-");
+        const monthlyKpi = await calculateMonthlyKPI(
+          flow_id,
+          flowData.kpi_metric,
+          parseInt(month),
+          parseInt(year),
+          user_id,
+          user_role,
+          requesting_user_id
+        );
+        monthlyKpiCache[period] = monthlyKpi;
+      }
+
+      // Тепер розраховуємо прибуток для кожного рядка використовуючи кеш
+      statsWithProfit = statsData.map((row) => {
+        const periodKey = `${row.year}-${row.month}`;
+        const monthlyKpi = monthlyKpiCache[periodKey] || 0;
+
+        // Знаходимо відповідний spend_multiplier
+        const spendMultiplier = findSpendMultiplier(
+          monthlyKpi,
+          flowData.spend_percentage_ranges
+        );
+
+        const profit = row.spend * spendMultiplier;
+
+        return {
+          ...row,
+          profit: Math.round(profit * 100) / 100,
+          monthly_kpi: monthlyKpi, // Додатково включаємо KPI для інформації
+          spend_multiplier: spendMultiplier, // Додатково включаємо множник для інформації
+        };
+      });
+    } else {
+      // Невідомий тип потоку
+      statsWithProfit = statsData.map((row) => ({
+        ...row,
+        profit: 0,
+      }));
+    }
+
+    return statsWithProfit;
   } catch (error) {
     console.error("Помилка при отриманні статистики потоку:", error);
     throw error;
+  }
+};
+
+/**
+ * ДОДАНО: Функція для розрахунку місячної KPI метрики
+ */
+const calculateMonthlyKPI = async (
+  flow_id,
+  kpi_metric,
+  month,
+  year,
+  user_id,
+  user_role,
+  requesting_user_id
+) => {
+  let conditions = ["fs.flow_id = $1", "fs.month = $2", "fs.year = $3"];
+  let params = [flow_id, month, year];
+  let paramIndex = 3;
+
+  // Застосовуємо ту ж логіку фільтрації користувачів
+  if (user_role === "buyer") {
+    paramIndex++;
+    conditions.push(`fs.user_id = $${paramIndex}`);
+    params.push(requesting_user_id);
+  } else if (user_id && ["admin", "bizdev", "teamlead"].includes(user_role)) {
+    paramIndex++;
+    conditions.push(`fs.user_id = $${paramIndex}`);
+    params.push(user_id);
+  }
+
+  const whereClause = conditions.join(" AND ");
+
+  let metricQuery = "";
+
+  switch (kpi_metric) {
+    case "OAS":
+      metricQuery = `
+        SELECT 
+          CASE 
+            WHEN SUM(fs.spend) > 0 
+            THEN ROUND((SUM(fs.deposit_amount)::numeric / SUM(fs.spend) * 100)::numeric, 2)
+            ELSE 0 
+          END as monthly_metric
+        FROM flow_stats fs
+        WHERE ${whereClause}
+      `;
+      break;
+
+    case "RD":
+      metricQuery = `
+        SELECT 
+          CASE 
+            WHEN SUM(COALESCE(fs.verified_deps, fs.deps)) > 0 
+            THEN ROUND((SUM(fs.redep_count)::numeric / SUM(COALESCE(fs.verified_deps, fs.deps)) * 100)::numeric, 2)
+            ELSE 0 
+          END as monthly_metric
+        FROM flow_stats fs
+        WHERE ${whereClause}
+      `;
+      break;
+
+    case "URD":
+      metricQuery = `
+        SELECT 
+          CASE 
+            WHEN SUM(COALESCE(fs.verified_deps, fs.deps)) > 0 
+            THEN ROUND((SUM(fs.unique_redep_count)::numeric / SUM(COALESCE(fs.verified_deps, fs.deps)) * 100)::numeric, 2)
+            ELSE 0 
+          END as monthly_metric
+        FROM flow_stats fs
+        WHERE ${whereClause}
+      `;
+      break;
+
+    case "CPD":
+      metricQuery = `
+        SELECT 
+          CASE 
+            WHEN SUM(COALESCE(fs.verified_deps, fs.deps)) > 0 
+            THEN ROUND((SUM(fs.spend)::numeric / SUM(COALESCE(fs.verified_deps, fs.deps)))::numeric, 2)
+            ELSE 0 
+          END as monthly_metric
+        FROM flow_stats fs
+        WHERE ${whereClause}
+      `;
+      break;
+
+    default:
+      return 0;
+  }
+
+  try {
+    const result = await db.query(metricQuery, params);
+    return result.rows[0]?.monthly_metric || 0;
+  } catch (error) {
+    console.error(`Помилка при розрахунку ${kpi_metric}:`, error);
+    return 0;
+  }
+};
+
+/**
+ * ДОДАНО: Функція для знаходження spend_multiplier за значенням метрики
+ */
+const findSpendMultiplier = (metricValue, spendPercentageRanges) => {
+  if (!spendPercentageRanges || !Array.isArray(spendPercentageRanges)) {
+    return 0;
+  }
+
+  try {
+    // Якщо це рядок JSON, парсимо його
+    const ranges =
+      typeof spendPercentageRanges === "string"
+        ? JSON.parse(spendPercentageRanges)
+        : spendPercentageRanges;
+
+    // Сортуємо діапазони за min_percentage для правильного пошуку
+    const sortedRanges = ranges.sort(
+      (a, b) => a.min_percentage - b.min_percentage
+    );
+
+    for (const range of sortedRanges) {
+      const minPercentage = range.min_percentage || 0;
+      const maxPercentage = range.max_percentage;
+
+      // Якщо max_percentage не вказано (null/undefined), це означає "від min_percentage і вище"
+      if (maxPercentage === null || maxPercentage === undefined) {
+        if (metricValue >= minPercentage) {
+          return range.spend_multiplier || 0;
+        }
+      } else {
+        // Звичайний діапазон з min та max
+        if (metricValue >= minPercentage && metricValue <= maxPercentage) {
+          return range.spend_multiplier || 0;
+        }
+      }
+    }
+
+    // Якщо не знайдено відповідного діапазону, повертаємо 0
+    return 0;
+  } catch (error) {
+    console.error("Помилка при парсингу spend_percentage_ranges:", error);
+    return 0;
   }
 };
 
@@ -2132,6 +2395,7 @@ const getCompanyMonthlyStats = async (options = {}) => {
 
 /**
  * ОНОВЛЕНО: Отримання агрегованої статистики за період з урахуванням user_id
+ * ДОДАНО: нові метрики OAS, RD, URD, CPD та розрахунок прибутку
  * @param {number} flow_id - ID потоку
  * @param {Object} options - Опції фільтрації та групування
  * @param {number} requesting_user_id - ID користувача, що робить запит
@@ -2145,6 +2409,18 @@ const getAggregatedStats = async (
   user_role
 ) => {
   const { month, year, dateFrom, dateTo, user_id } = options;
+
+  // ДОДАНО: Отримуємо дані про потік для розрахунку прибутку
+  const flowQuery = `
+    SELECT 
+      flow_type,
+      kpi_metric,
+      kpi_target_value,
+      spend_percentage_ranges,
+      cpa
+    FROM flows 
+    WHERE id = $1
+  `;
 
   const conditions = ["fs.flow_id = $1"];
   const params = [flow_id];
@@ -2188,7 +2464,7 @@ const getAggregatedStats = async (
     params.push(toDate.toISOString().split("T")[0]);
   }
 
-  // ОНОВЛЕНО: запит з новими полями
+  // ОНОВЛЕНО: запит з новими полями та метриками
   const query = `
     SELECT 
       COUNT(*) as total_days,
@@ -2203,7 +2479,7 @@ const getAggregatedStats = async (
       SUM(fs.unique_redep_count) as total_unique_redep_count,
       AVG(fs.cpa) as avg_cpa,
       
-      -- Агреговані метрики
+      -- Існуючі агреговані метрики
       CASE 
         WHEN SUM(fs.spend) > 0 THEN ROUND(((SUM(fs.deps * fs.cpa) - SUM(fs.spend)) / SUM(fs.spend) * 100)::numeric, 2)
         ELSE 0 
@@ -2221,26 +2497,123 @@ const getAggregatedStats = async (
         ELSE 0 
       END as verification_rate,
       
+      -- ДОДАНО: Нові агреговані метрики
+      -- OAS - (deposit_amount / spend) * 100%
+      CASE 
+        WHEN SUM(fs.spend) > 0 THEN ROUND((SUM(fs.deposit_amount)::numeric / SUM(fs.spend) * 100)::numeric, 2)
+        ELSE 0 
+      END as total_oas,
+      
+      -- RD - (redep_count / deps) * 100% (використовуємо verified_deps або deps)
+      CASE 
+        WHEN SUM(COALESCE(fs.verified_deps, fs.deps)) > 0 THEN ROUND((SUM(fs.redep_count)::numeric / SUM(COALESCE(fs.verified_deps, fs.deps)) * 100)::numeric, 2)
+        ELSE 0 
+      END as total_rd,
+      
+      -- URD - (unique_redep_count / deps) * 100%
+      CASE 
+        WHEN SUM(COALESCE(fs.verified_deps, fs.deps)) > 0 THEN ROUND((SUM(fs.unique_redep_count)::numeric / SUM(COALESCE(fs.verified_deps, fs.deps)) * 100)::numeric, 2)
+        ELSE 0 
+      END as total_urd,
+      
+      -- CPD - spend / deps
+      CASE 
+        WHEN SUM(COALESCE(fs.verified_deps, fs.deps)) > 0 THEN ROUND((SUM(fs.spend)::numeric / SUM(COALESCE(fs.verified_deps, fs.deps)))::numeric, 2)
+        ELSE 0 
+      END as total_cpd,
+      
       -- Мін/макс значення
       MIN(fs.day) as first_activity_day,
       MAX(fs.day) as last_activity_day,
       MIN(fs.spend) FILTER (WHERE fs.spend > 0) as min_daily_spend,
       MAX(fs.spend) as max_daily_spend,
       MIN(fs.deps) FILTER (WHERE fs.deps > 0) as min_daily_deps,
-      MAX(fs.deps) as max_daily_deps
+      MAX(fs.deps) as max_daily_deps,
+      
+      -- ДОДАНО: Отримуємо унікальні комбінації місяць/рік для розрахунку прибутку
+      array_agg(DISTINCT fs.year || '-' || fs.month) as unique_periods
       
     FROM flow_stats fs
     WHERE ${conditions.join(" AND ")}
   `;
 
   try {
+    // Отримуємо дані про потік
+    const flowResult = await db.query(flowQuery, [flow_id]);
+    if (flowResult.rows.length === 0) {
+      throw new Error("Потік не знайдено");
+    }
+    const flowData = flowResult.rows[0];
+
+    // Отримуємо агреговану статистику
     const result = await db.query(query, params);
     const stats = result.rows[0];
+
+    // ДОДАНО: Розрахунок загального прибутку
+    let totalProfit = 0;
+
+    if (flowData.flow_type === "cpa") {
+      // CPA модель: verified_deps (або deps) * cpa
+      const totalDepsForCalculation =
+        parseInt(stats.total_verified_deps) || parseInt(stats.total_deps) || 0;
+      totalProfit = totalDepsForCalculation * (flowData.cpa || 0);
+    } else if (flowData.flow_type === "spend") {
+      // SPEND модель: потрібно розрахувати для кожного унікального періоду
+      const uniquePeriods = stats.unique_periods || [];
+
+      if (uniquePeriods.length > 0) {
+        // Отримуємо детальну статистику по періодах для spend моделі
+        const periodQuery = `
+          SELECT 
+            fs.year,
+            fs.month,
+            SUM(fs.spend) as period_spend
+          FROM flow_stats fs
+          WHERE ${conditions.join(" AND ")}
+          GROUP BY fs.year, fs.month
+        `;
+
+        const periodResult = await db.query(periodQuery, params);
+
+        // Розраховуємо прибуток для кожного періоду
+        for (const periodRow of periodResult.rows) {
+          const monthlyKpi = await calculateMonthlyKPI(
+            flow_id,
+            flowData.kpi_metric,
+            periodRow.month,
+            periodRow.year,
+            user_id,
+            user_role,
+            requesting_user_id
+          );
+
+          const spendMultiplier = findSpendMultiplier(
+            monthlyKpi,
+            flowData.spend_percentage_ranges
+          );
+
+          totalProfit += periodRow.period_spend * spendMultiplier;
+        }
+      }
+    }
+
+    // ДОДАНО: Перерахунок ROI через прибуток
+    const calculatedRoi =
+      parseFloat(stats.total_spend) > 0
+        ? Math.round(
+            (totalProfit / parseFloat(stats.total_spend)) * 100 * 100
+          ) / 100
+        : 0;
 
     return {
       flow_id,
       period: { month, year, dateFrom, dateTo },
       user_filter: user_id,
+      flow_info: {
+        flow_type: flowData.flow_type,
+        kpi_metric: flowData.kpi_metric,
+        cpa: flowData.cpa,
+      },
       aggregated: {
         total_days: parseInt(stats.total_days) || 0,
         unique_users: parseInt(stats.unique_users) || 0,
@@ -2253,10 +2626,23 @@ const getAggregatedStats = async (
         total_redep_count: parseInt(stats.total_redep_count) || 0,
         total_unique_redep_count: parseInt(stats.total_unique_redep_count) || 0,
         avg_cpa: parseFloat(stats.avg_cpa) || 0,
-        total_roi: parseFloat(stats.total_roi) || 0,
+
+        // Існуючі метрики
+        total_roi: calculatedRoi, // ЗМІНЕНО: тепер через прибуток
         total_inst2reg: parseFloat(stats.total_inst2reg) || 0,
         total_reg2dep: parseFloat(stats.total_reg2dep) || 0,
         verification_rate: parseFloat(stats.verification_rate) || 0,
+
+        // ДОДАНО: Нові метрики
+        total_oas: parseFloat(stats.total_oas) || 0,
+        total_rd: parseFloat(stats.total_rd) || 0,
+        total_urd: parseFloat(stats.total_urd) || 0,
+        total_cpd: parseFloat(stats.total_cpd) || 0,
+
+        // ДОДАНО: Прибуток
+        total_profit: Math.round(totalProfit * 100) / 100,
+
+        // Мін/макс значення
         first_activity_day: stats.first_activity_day,
         last_activity_day: stats.last_activity_day,
         min_daily_spend: parseFloat(stats.min_daily_spend) || 0,

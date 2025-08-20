@@ -553,6 +553,7 @@ const getCompanyMonthlyStats = async (req, res) => {
  * ОНОВЛЕНО: Отримання агрегованої статистики за період з фільтрацією по користувачах
  * GET /api/flow-stats/:flow_id/aggregated
  * Query params: month, year, dateFrom, dateTo, user_id
+ * ДОДАНО: підтримка нових метрик та прибутку
  */
 const getAggregatedStats = async (req, res) => {
   try {
@@ -689,6 +690,7 @@ const deleteFlowStat = async (req, res) => {
  * ОНОВЛЕНО: Отримання календарної статистики за місяць з урахуванням user_id
  * GET /api/flow-stats/:flow_id/calendar/:year/:month
  * Query params: user_id
+ * ДОДАНО: нові метрики OAS, RD, URD, CPD та розрахунок прибутку
  */
 const getMonthlyCalendarStats = async (req, res) => {
   try {
@@ -724,6 +726,7 @@ const getMonthlyCalendarStats = async (req, res) => {
       user_id: user_id ? parseInt(user_id) : undefined,
     };
 
+    // Отримуємо статистику через оновлений метод getFlowStats
     const stats = await flowStatsModel.getFlowStats(
       flow_id,
       options,
@@ -751,9 +754,18 @@ const getMonthlyCalendarStats = async (req, res) => {
           deposit_amount: 0,
           redep_count: 0,
           unique_redep_count: 0,
+          cpa: 0,
+          // Існуючі розраховані метрики
           roi: 0,
           inst2reg: 0,
           reg2dep: 0,
+          // ДОДАНО: Нові метрики
+          oas: 0,
+          rd: 0,
+          urd: 0,
+          cpd: 0,
+          // ДОДАНО: Прибуток
+          profit: 0,
         },
         hasData: false,
       };
@@ -776,49 +788,179 @@ const getMonthlyCalendarStats = async (req, res) => {
           redep_count: parseInt(stat.redep_count) || 0,
           unique_redep_count: parseInt(stat.unique_redep_count) || 0,
           cpa: parseFloat(stat.cpa) || 0,
+          // Існуючі розраховані метрики
           roi: parseFloat(stat.roi) || 0,
           inst2reg: parseFloat(stat.inst2reg) || 0,
           reg2dep: parseFloat(stat.reg2dep) || 0,
+          // ДОДАНО: Нові метрики
+          oas: parseFloat(stat.oas) || 0,
+          rd: parseFloat(stat.rd) || 0,
+          urd: parseFloat(stat.urd) || 0,
+          cpd: parseFloat(stat.cpd) || 0,
+          // ДОДАНО: Прибуток (якщо є)
+          profit: parseFloat(stat.profit) || 0,
+          // Додаткові дані для spend моделі
+          monthly_kpi: parseFloat(stat.monthly_kpi) || undefined,
+          spend_multiplier: parseFloat(stat.spend_multiplier) || undefined,
           notes: stat.notes,
         });
 
         // Оновлюємо агреговані дані для дня
-        calendar[day].aggregated.spend += parseFloat(stat.spend) || 0;
-        calendar[day].aggregated.installs += parseInt(stat.installs) || 0;
-        calendar[day].aggregated.regs += parseInt(stat.regs) || 0;
-        calendar[day].aggregated.deps += parseInt(stat.deps) || 0;
-        calendar[day].aggregated.verified_deps +=
-          parseInt(stat.verified_deps) || 0;
-        calendar[day].aggregated.deposit_amount +=
-          parseFloat(stat.deposit_amount) || 0;
-        calendar[day].aggregated.redep_count += parseInt(stat.redep_count) || 0;
-        calendar[day].aggregated.unique_redep_count +=
-          parseInt(stat.unique_redep_count) || 0;
+        const agg = calendar[day].aggregated;
+        agg.spend += parseFloat(stat.spend) || 0;
+        agg.installs += parseInt(stat.installs) || 0;
+        agg.regs += parseInt(stat.regs) || 0;
+        agg.deps += parseInt(stat.deps) || 0;
+        agg.verified_deps += parseInt(stat.verified_deps) || 0;
+        agg.deposit_amount += parseFloat(stat.deposit_amount) || 0;
+        agg.redep_count += parseInt(stat.redep_count) || 0;
+        agg.unique_redep_count += parseInt(stat.unique_redep_count) || 0;
+        agg.profit += parseFloat(stat.profit) || 0;
+
+        // Для CPA беремо середньозважене значення
+        const userCpa = parseFloat(stat.cpa) || 0;
+        const userDeps = parseInt(stat.deps) || 0;
+        if (userDeps > 0) {
+          agg.cpa =
+            (agg.cpa * (agg.deps - userDeps) + userCpa * userDeps) / agg.deps;
+        }
 
         calendar[day].hasData = true;
       }
     });
 
-    // Обчислюємо агреговані проценти для кожного дня
+    // Обчислюємо агреговані метрики для кожного дня
     Object.values(calendar).forEach((dayData) => {
       if (dayData.hasData) {
         const agg = dayData.aggregated;
+
+        // Існуючі метрики
         agg.inst2reg = agg.installs > 0 ? (agg.regs / agg.installs) * 100 : 0;
         agg.reg2dep = agg.regs > 0 ? (agg.deps / agg.regs) * 100 : 0;
 
-        // ROI обчислюємо на основі середнього CPA користувачів
-        const totalRevenue = dayData.users_stats.reduce((sum, user) => {
-          return sum + user.deps * user.cpa;
-        }, 0);
-        agg.roi =
-          agg.spend > 0 ? ((totalRevenue - agg.spend) / agg.spend) * 100 : 0;
+        // ROI через прибуток
+        agg.roi = agg.spend > 0 ? (agg.profit / agg.spend) * 100 : 0;
 
-        // Округлюємо
+        // ДОДАНО: Нові агреговані метрики
+        // Використовуємо verified_deps або deps для розрахунків
+        const depsForCalculation =
+          agg.verified_deps > 0 ? agg.verified_deps : agg.deps;
+
+        // OAS - (deposit_amount / spend) * 100%
+        agg.oas = agg.spend > 0 ? (agg.deposit_amount / agg.spend) * 100 : 0;
+
+        // RD - (redep_count / deps) * 100%
+        agg.rd =
+          depsForCalculation > 0
+            ? (agg.redep_count / depsForCalculation) * 100
+            : 0;
+
+        // URD - (unique_redep_count / deps) * 100%
+        agg.urd =
+          depsForCalculation > 0
+            ? (agg.unique_redep_count / depsForCalculation) * 100
+            : 0;
+
+        // CPD - spend / deps
+        agg.cpd = depsForCalculation > 0 ? agg.spend / depsForCalculation : 0;
+
+        // Округлюємо всі метрики
         agg.roi = Math.round(agg.roi * 100) / 100;
         agg.inst2reg = Math.round(agg.inst2reg * 100) / 100;
         agg.reg2dep = Math.round(agg.reg2dep * 100) / 100;
+        agg.oas = Math.round(agg.oas * 100) / 100;
+        agg.rd = Math.round(agg.rd * 100) / 100;
+        agg.urd = Math.round(agg.urd * 100) / 100;
+        agg.cpd = Math.round(agg.cpd * 100) / 100;
+        agg.profit = Math.round(agg.profit * 100) / 100;
+        agg.cpa = Math.round(agg.cpa * 100) / 100;
       }
     });
+
+    // ДОДАНО: Розрахунок підсумкової статистики за місяць
+    const monthlyTotals = Object.values(calendar)
+      .filter((d) => d.hasData)
+      .reduce(
+        (totals, dayData) => {
+          const agg = dayData.aggregated;
+          return {
+            spend: totals.spend + agg.spend,
+            installs: totals.installs + agg.installs,
+            regs: totals.regs + agg.regs,
+            deps: totals.deps + agg.deps,
+            verified_deps: totals.verified_deps + agg.verified_deps,
+            deposit_amount: totals.deposit_amount + agg.deposit_amount,
+            redep_count: totals.redep_count + agg.redep_count,
+            unique_redep_count:
+              totals.unique_redep_count + agg.unique_redep_count,
+            profit: totals.profit + agg.profit,
+          };
+        },
+        {
+          spend: 0,
+          installs: 0,
+          regs: 0,
+          deps: 0,
+          verified_deps: 0,
+          deposit_amount: 0,
+          redep_count: 0,
+          unique_redep_count: 0,
+          profit: 0,
+        }
+      );
+
+    // Розраховуємо місячні метрики
+    const depsForMonthlyCalculation =
+      monthlyTotals.verified_deps > 0
+        ? monthlyTotals.verified_deps
+        : monthlyTotals.deps;
+    const monthlyMetrics = {
+      roi:
+        monthlyTotals.spend > 0
+          ? Math.round(
+              (monthlyTotals.profit / monthlyTotals.spend) * 100 * 100
+            ) / 100
+          : 0,
+      inst2reg:
+        monthlyTotals.installs > 0
+          ? Math.round(
+              (monthlyTotals.regs / monthlyTotals.installs) * 100 * 100
+            ) / 100
+          : 0,
+      reg2dep:
+        monthlyTotals.regs > 0
+          ? Math.round((monthlyTotals.deps / monthlyTotals.regs) * 100 * 100) /
+            100
+          : 0,
+      oas:
+        monthlyTotals.spend > 0
+          ? Math.round(
+              (monthlyTotals.deposit_amount / monthlyTotals.spend) * 100 * 100
+            ) / 100
+          : 0,
+      rd:
+        depsForMonthlyCalculation > 0
+          ? Math.round(
+              (monthlyTotals.redep_count / depsForMonthlyCalculation) *
+                100 *
+                100
+            ) / 100
+          : 0,
+      urd:
+        depsForMonthlyCalculation > 0
+          ? Math.round(
+              (monthlyTotals.unique_redep_count / depsForMonthlyCalculation) *
+                100 *
+                100
+            ) / 100
+          : 0,
+      cpd:
+        depsForMonthlyCalculation > 0
+          ? Math.round(
+              (monthlyTotals.spend / depsForMonthlyCalculation) * 100
+            ) / 100
+          : 0,
+    };
 
     res.json({
       success: true,
@@ -833,6 +975,9 @@ const getMonthlyCalendarStats = async (req, res) => {
           days_with_data: Object.values(calendar).filter((d) => d.hasData)
             .length,
           unique_users: [...new Set(stats.map((s) => s.user_id))].length,
+          // ДОДАНО: Місячні підсумки
+          monthly_totals: monthlyTotals,
+          monthly_metrics: monthlyMetrics,
         },
       },
     });
