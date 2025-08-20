@@ -8,6 +8,7 @@ const db = require("../config/db");
  * Створення або оновлення статистики за день
  * @param {Object} data - Дані статистики
  * @param {number} data.flow_id - ID потоку
+ * @param {number} data.user_id - ID користувача (ОБОВ'ЯЗКОВО)
  * @param {number} data.day - День (1-31)
  * @param {number} data.month - Місяць (1-12)
  * @param {number} data.year - Рік
@@ -16,7 +17,9 @@ const db = require("../config/db");
  * @param {number} [data.regs] - Реєстрації
  * @param {number} [data.deps] - Депозити
  * @param {number} [data.verified_deps] - Верифіковані депозити
- * @param {number} [data.cpa] - CPA
+ * @param {number} [data.deposit_amount] - Сума депозитів (НОВИЙ)
+ * @param {number} [data.redep_count] - Кількість редепозитів (НОВИЙ)
+ * @param {number} [data.unique_redep_count] - Кількість унікальних редепозитів (НОВИЙ)
  * @param {string} [data.notes] - Примітки
  * @param {number} data.updated_by - ID користувача, що оновлює
  * @returns {Promise<Object>} Створений або оновлений запис
@@ -24,6 +27,7 @@ const db = require("../config/db");
 const upsertFlowStat = async (data) => {
   const {
     flow_id,
+    user_id, // НОВИЙ ОБОВ'ЯЗКОВИЙ ПАРАМЕТР
     day,
     month,
     year,
@@ -32,10 +36,17 @@ const upsertFlowStat = async (data) => {
     regs = 0,
     deps = 0,
     verified_deps = 0,
-    cpa = 0,
+    deposit_amount = 0, // НОВИЙ
+    redep_count = 0, // НОВИЙ
+    unique_redep_count = 0, // НОВИЙ
     notes = null,
     updated_by,
   } = data;
+
+  // ОНОВЛЕНО: перевіряємо обов'язкові поля включно з user_id
+  if (!flow_id || !user_id || !day || !month || !year) {
+    throw new Error("Обов'язкові поля: flow_id, user_id, day, month, year");
+  }
 
   // Перевіряємо, що дата коректна
   const date = new Date(year, month - 1, day);
@@ -47,82 +58,97 @@ const upsertFlowStat = async (data) => {
     throw new Error("Некоректна дата");
   }
 
+  // Перевіряємо, що користувач належить до потоку
+  const userFlowCheck = await db.query(
+    `SELECT 1 FROM flow_users 
+     WHERE flow_id = $1 AND user_id = $2 AND status = 'active'`,
+    [flow_id, user_id]
+  );
+
+  if (userFlowCheck.rows.length === 0) {
+    throw new Error("Користувач не належить до цього потоку або неактивний");
+  }
+
+  // ОНОВЛЕНО: отримуємо CPA з потоку, якщо тип потоку - cpa
+  let cpa_value = 0;
+  const flowQuery = await db.query(
+    `SELECT flow_type, cpa FROM flows WHERE id = $1`,
+    [flow_id]
+  );
+
+  if (flowQuery.rows.length > 0 && flowQuery.rows[0].flow_type === "cpa") {
+    cpa_value = flowQuery.rows[0].cpa || 0;
+  }
+
+  // ОНОВЛЕНО: запит з новими полями та логікою CPA
   const query = `
     INSERT INTO flow_stats (
-      flow_id, day, month, year, spend, installs, regs, deps, 
-      verified_deps, cpa, notes, created_by, updated_by
+      flow_id, user_id, day, month, year, spend, installs, regs, deps, 
+      verified_deps, cpa, deposit_amount, redep_count, unique_redep_count,
+      notes, created_by, updated_by
     )
-    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $12)
-    ON CONFLICT (flow_id, day, month, year)
+    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $16)
+    ON CONFLICT (flow_id, user_id, day, month, year)
     DO UPDATE SET
       spend = EXCLUDED.spend,
       installs = EXCLUDED.installs,
       regs = EXCLUDED.regs,
       deps = EXCLUDED.deps,
       verified_deps = EXCLUDED.verified_deps,
-      cpa = EXCLUDED.cpa,
+      deposit_amount = EXCLUDED.deposit_amount,
+      redep_count = EXCLUDED.redep_count,
+      unique_redep_count = EXCLUDED.unique_redep_count,
       notes = EXCLUDED.notes,
       updated_by = EXCLUDED.updated_by,
-      updated_at = CURRENT_TIMESTAMP
+      updated_at = NOW()
     RETURNING *, 
-      -- Обчислювані метрики
       CASE 
-        WHEN spend > 0 THEN ROUND(((deps * cpa - spend) / spend * 100)::numeric, 2)
+        WHEN spend > 0 AND deps > 0 AND cpa > 0
+        THEN ROUND(((deps * cpa - spend) / spend * 100)::numeric, 2)
         ELSE 0 
       END as roi,
       CASE 
-        WHEN installs > 0 THEN ROUND((regs::numeric / installs * 100)::numeric, 2)
+        WHEN installs > 0 
+        THEN ROUND((regs::numeric / installs * 100)::numeric, 2)
         ELSE 0 
       END as inst2reg,
       CASE 
-        WHEN regs > 0 THEN ROUND((deps::numeric / regs * 100)::numeric, 2)
+        WHEN regs > 0 
+        THEN ROUND((deps::numeric / regs * 100)::numeric, 2)
         ELSE 0 
       END as reg2dep
   `;
 
-  const params = [
-    flow_id,
-    day,
-    month,
-    year,
-    spend,
-    installs,
-    regs,
-    deps,
-    verified_deps,
-    cpa,
-    notes,
-    updated_by,
-  ];
-
   try {
-    const result = await db.query(query, params);
+    const result = await db.query(query, [
+      flow_id,
+      user_id,
+      day,
+      month,
+      year,
+      spend,
+      installs,
+      regs,
+      deps,
+      verified_deps,
+      cpa_value,
+      deposit_amount,
+      redep_count,
+      unique_redep_count,
+      notes,
+      updated_by,
+    ]);
     return result.rows[0];
   } catch (error) {
-    console.error("Помилка при створенні/оновленні статистики:", error);
+    console.error("Помилка при збереженні статистики:", error);
     throw error;
   }
 };
 
 /**
- * Отримання всіх потоків зі статистикою за певний день з фільтрацією за партнерами
- * @param {Object} options - Опції фільтрації
- * @param {number} options.year - Рік
- * @param {number} options.month - Місяць
- * @param {number} options.day - День
- * @param {number} [options.partnerId] - ID партнера
- * @param {Array<number>} [options.partnerIds] - Масив ID партнерів
- * @param {string} [options.status] - Статус потоку
- * @param {number} [options.teamId] - ID команди
- * @param {number} [options.userId] - ID користувача
- * @param {boolean} [options.onlyActive] - Тільки активні потоки
- * @param {boolean} [options.includeUsers] - Включити інформацію про користувачів
- * @param {number} [options.page] - Номер сторінки
- * @param {number} [options.limit] - Кількість елементів на сторінці
- * @param {number} [options.offset] - Зсув для пагінації
- * @returns {Promise<Object>} Об'єкт з масивом потоків та загальною кількістю
+ * ОНОВЛЕНО: Отримання денної статистики потоків з урахуванням користувачів
  */
-const getDailyFlowsStats = async (options = {}) => {
+const getDailyFlowsStats = async (options) => {
   const {
     year,
     month,
@@ -132,105 +158,68 @@ const getDailyFlowsStats = async (options = {}) => {
     status,
     teamId,
     userId,
-    onlyActive = false,
-    includeUsers = false,
+    onlyActive,
+    includeUsers,
+    page = 1,
     limit = 20,
     offset = 0,
   } = options;
 
-  console.log("getDailyFlowsStats викликано з опціями:", options);
+  let conditions = [];
+  let params = [year, month, day];
+  let paramIndex = 3;
 
-  try {
-    // Крок 1: Будуємо WHERE умови та параметри
-    const whereConditions = [];
-    const queryParams = [];
-    let paramCounter = 1;
+  // Базові фільтри
+  if (partnerId) {
+    paramIndex++;
+    conditions.push(`o.partner_id = $${paramIndex}`);
+    params.push(partnerId);
+  }
 
-    if (status && !onlyActive) {
-      whereConditions.push(`f.status = $${paramCounter++}`);
-      queryParams.push(status);
-    }
+  if (partnerIds && partnerIds.length > 0) {
+    paramIndex++;
+    conditions.push(`o.partner_id = ANY($${paramIndex})`);
+    params.push(partnerIds);
+  }
 
-    // Додаткові фільтри
-    if (onlyActive) {
-      whereConditions.push(`f.status = $${paramCounter++}`);
-      queryParams.push("active");
-    }
+  if (status) {
+    paramIndex++;
+    conditions.push(`f.status = $${paramIndex}`);
+    params.push(status);
+  }
 
-    if (teamId) {
-      whereConditions.push(`f.team_id = $${paramCounter++}`);
-      queryParams.push(teamId);
-    }
+  if (teamId) {
+    paramIndex++;
+    conditions.push(`f.team_id = $${paramIndex}`);
+    params.push(teamId);
+  }
 
-    if (partnerId) {
-      whereConditions.push(`o.partner_id = $${paramCounter++}`);
-      queryParams.push(partnerId);
-    }
+  if (userId) {
+    paramIndex++;
+    conditions.push(`fu.user_id = $${paramIndex}`);
+    params.push(userId);
+  }
 
-    if (partnerIds && partnerIds.length > 0) {
-      whereConditions.push(`o.partner_id = ANY($${paramCounter++})`);
-      queryParams.push(partnerIds);
-    }
+  if (onlyActive) {
+    conditions.push(`f.is_active = true`);
+    conditions.push(`fu.status = 'active'`);
+  }
 
-    if (userId) {
-      whereConditions.push(`EXISTS (
-        SELECT 1 FROM flow_users fu 
-        WHERE fu.flow_id = f.id 
-        AND fu.user_id = $${paramCounter++} 
-        AND fu.status = 'active'
-      )`);
-      queryParams.push(userId);
-    }
+  const whereClause =
+    conditions.length > 0 ? `AND ${conditions.join(" AND ")}` : "";
 
-    const whereClause =
-      whereConditions.length > 0 ? `AND ${whereConditions.join(" AND ")}` : "";
-
-    console.log("WHERE умови:", { whereConditions, queryParams, whereClause });
-
-    // Крок 2: Запит для підрахунку загальної кількості (БЕЗ статистики)
-    const countQuery = `
-      SELECT COUNT(DISTINCT f.id) as total_count
-      FROM flows f
-      LEFT JOIN offers o ON f.offer_id = o.id
-      LEFT JOIN partners p ON o.partner_id = p.id
-      WHERE 1=1 ${whereClause}
-    `;
-
-    console.log("Count query:", countQuery);
-    console.log("Count params:", queryParams);
-
-    const countResult = await db.query(countQuery, queryParams);
-    const totalCount = parseInt(countResult.rows[0].total_count) || 0;
-
-    console.log("Total count отримано:", totalCount);
-
-    // Крок 3: Основний запит з пагінацією
-    // Додаємо параметри для дати статистики
-    const statsYear = paramCounter++;
-    const statsMonth = paramCounter++;
-    const statsDay = paramCounter++;
-    const limitParam = paramCounter++;
-    const offsetParam = paramCounter++;
-
-    const mainParams = [...queryParams, year, month, day, limit, offset];
-
-    // Будуємо умову для дати статистики в основному запиті
-    const statsDateCondition = `(fs.year = $${statsYear} AND fs.month = $${statsMonth} AND fs.day = $${statsDay})`;
-
-    const mainQuery = `
-      SELECT 
-        -- Основні дані потоку
+  // ОНОВЛЕНО: основний запит з врахуванням user_id в статистиці
+  const query = `
+    WITH flow_users_data AS (
+      SELECT DISTINCT 
         f.id as flow_id,
         f.name as flow_name,
         f.status as flow_status,
-        f.is_active as flow_is_active,
         f.cpa as flow_cpa,
         f.currency as flow_currency,
         f.description as flow_description,
-        f.conditions as flow_conditions,
-        f.kpi as flow_kpi,
-        f.created_at as flow_created_at,
-        f.team_id,
+        f.flow_type,
+        f.kpi_metric,
         
         -- Дані партнера
         p.id as partner_id,
@@ -254,21 +243,46 @@ const getDailyFlowsStats = async (options = {}) => {
         g.name as geo_name,
         g.country_code as geo_country_code,
         
-        -- Статистика за день
+        -- Дані користувачів потоку
+        fu.user_id,
+        u.username,
+        u.first_name,
+        u.last_name,
+        CONCAT(u.first_name, ' ', u.last_name) as user_full_name,
+        u.role as user_role
+        
+      FROM flows f
+      LEFT JOIN offers o ON f.offer_id = o.id
+      LEFT JOIN partners p ON o.partner_id = p.id
+      LEFT JOIN teams t ON f.team_id = t.id
+      LEFT JOIN geos g ON f.geo_id = g.id
+      LEFT JOIN flow_users fu ON f.id = fu.flow_id AND fu.status = 'active'
+      LEFT JOIN users u ON fu.user_id = u.id
+      WHERE 1=1 ${whereClause}
+    ),
+    
+    stats_data AS (
+      SELECT 
+        fud.*,
+        -- ОНОВЛЕНО: статистика за користувачем
         fs.id as stats_id,
+        fs.user_id as stats_user_id,
         fs.spend,
         fs.installs,
         fs.regs,
         fs.deps,
         fs.verified_deps,
         fs.cpa as stats_cpa,
+        fs.deposit_amount,
+        fs.redep_count,
+        fs.unique_redep_count,
         fs.notes as stats_notes,
         fs.created_at as stats_created_at,
         fs.updated_at as stats_updated_at,
         
         -- Обчислювальні поля
         CASE 
-          WHEN fs.id IS NOT NULL AND fs.spend > 0 
+          WHEN fs.id IS NOT NULL AND fs.spend > 0 AND fs.deps > 0 AND fs.cpa > 0
           THEN ROUND(((fs.deps * fs.cpa - fs.spend) / fs.spend * 100)::numeric, 2)
           ELSE NULL 
         END as roi,
@@ -281,200 +295,300 @@ const getDailyFlowsStats = async (options = {}) => {
           WHEN fs.id IS NOT NULL AND fs.regs > 0 
           THEN ROUND((fs.deps::numeric / fs.regs * 100)::numeric, 2)
           ELSE NULL 
-        END as reg2dep,
+        END as reg2dep
         
-        -- Прапорець наявності статистики
-        CASE WHEN fs.id IS NOT NULL THEN true ELSE false END as has_stats,
-        
-        -- Кількість активних користувачів
-        (SELECT COUNT(*) 
-         FROM flow_users fu 
-         WHERE fu.flow_id = f.id 
-         AND fu.status = 'active') as active_users_count
-         
-      FROM flows f
-      LEFT JOIN offers o ON f.offer_id = o.id
-      LEFT JOIN partners p ON o.partner_id = p.id
-      LEFT JOIN teams t ON f.team_id = t.id
-      LEFT JOIN geos g ON f.geo_id = g.id
-      LEFT JOIN flow_stats fs ON f.id = fs.flow_id AND ${statsDateCondition}
-      WHERE 1=1 ${whereClause}
-      ORDER BY 
-        CASE WHEN fs.id IS NOT NULL THEN 0 ELSE 1 END,
-        p.name ASC,
-        f.name ASC
-      LIMIT $${limitParam} OFFSET $${offsetParam}
-    `;
+      FROM flow_users_data fud
+      LEFT JOIN flow_stats fs ON fud.flow_id = fs.flow_id 
+        AND fud.user_id = fs.user_id 
+        AND fs.day = $1 AND fs.month = $2 AND fs.year = $3
+    )
+    
+    SELECT 
+      sd.*,
+      CASE WHEN sd.stats_id IS NOT NULL THEN true ELSE false END as has_stats
+    FROM stats_data sd
+    ORDER BY sd.flow_name, sd.user_full_name
+    LIMIT $${paramIndex + 1} OFFSET $${paramIndex + 2}
+  `;
 
-    console.log("Main query:", mainQuery);
-    console.log("Main params:", mainParams);
+  params.push(limit, offset);
 
-    const result = await db.query(mainQuery, mainParams);
+  // Запит для підрахунку загальної кількості
+  const countQuery = `
+    SELECT COUNT(DISTINCT CONCAT(f.id, '-', fu.user_id)) as total
+    FROM flows f
+    LEFT JOIN offers o ON f.offer_id = o.id
+    LEFT JOIN partners p ON o.partner_id = p.id
+    LEFT JOIN flow_users fu ON f.id = fu.flow_id AND fu.status = 'active'
+    WHERE 1=1 ${whereClause}
+  `;
 
-    console.log(`Отримано ${result.rows.length} рядків з основного запиту`);
+  try {
+    const [flowsResult, countResult] = await Promise.all([
+      db.query(query, params.slice(0, -2).concat([limit, offset])),
+      db.query(countQuery, params.slice(0, params.length - 2)),
+    ]);
 
-    // Крок 4: Отримуємо користувачів якщо потрібно
-    let usersData = {};
-    if (includeUsers && result.rows.length > 0) {
-      const flowIds = result.rows.map((row) => row.flow_id);
+    // Групуємо результати по потоках та користувачах
+    const flowsMap = new Map();
 
-      const usersQuery = `
-        SELECT 
-          fu.flow_id,
-          u.username,
-          u.first_name,
-          u.last_name
-        FROM flow_users fu
-        JOIN users u ON fu.user_id = u.id
-        WHERE fu.flow_id = ANY($1) AND fu.status = 'active'
-        ORDER BY fu.joined_at DESC
-      `;
+    flowsResult.rows.forEach((row) => {
+      const flowKey = `${row.flow_id}-${row.user_id}`;
 
-      console.log("Users query для flow_ids:", flowIds);
+      if (!flowsMap.has(flowKey)) {
+        flowsMap.set(flowKey, {
+          flow_id: row.flow_id,
+          flow_name: row.flow_name,
+          flow_status: row.flow_status,
+          flow_cpa: row.flow_cpa,
+          flow_currency: row.flow_currency,
+          flow_description: row.flow_description,
+          flow_type: row.flow_type,
+          kpi_metric: row.kpi_metric,
 
-      const usersResult = await db.query(usersQuery, [flowIds]);
-
-      // Групуємо користувачів за flow_id
-      usersData = usersResult.rows.reduce((acc, user) => {
-        if (!acc[user.flow_id]) {
-          acc[user.flow_id] = [];
-        }
-        acc[user.flow_id].push({
-          id: user.user_id,
-          username: user.username,
-          email: user.email,
-          first_name: user.first_name,
-          last_name: user.last_name,
-          full_name:
-            user.first_name && user.last_name
-              ? `${user.first_name} ${user.last_name}`
-              : user.username,
-          role: user.role,
-          is_active: user.user_is_active,
-          avatar_url: user.avatar_url,
-          telegram_username: user.telegram_username,
-          last_login_at: user.last_login_at,
-          flow_participation: {
-            status: user.user_status,
-            notes: user.user_notes,
-            joined_at: user.joined_at,
-            left_at: user.left_at,
-          },
-        });
-        return acc;
-      }, {});
-
-      console.log(
-        `Отримано користувачів для ${Object.keys(usersData).length} потоків`
-      );
-    }
-
-    // Крок 5: Форматуємо результат
-    const flows = result.rows.map((row) => ({
-      flow: {
-        id: row.flow_id,
-        name: row.flow_name,
-        status: row.flow_status,
-        is_active: row.flow_is_active,
-        cpa: parseFloat(row.flow_cpa) || 0,
-        currency: row.flow_currency,
-        description: row.flow_description,
-        conditions: row.flow_conditions,
-        kpi: row.flow_kpi,
-        created_at: row.flow_created_at,
-        team_id: row.team_id,
-        active_users_count: parseInt(row.active_users_count) || 0,
-      },
-
-      partner: row.partner_id
-        ? {
+          partner: {
             id: row.partner_id,
             name: row.partner_name,
             type: row.partner_type,
             is_active: row.partner_is_active,
-            contact_telegram: row.partner_telegram,
-            contact_email: row.partner_email,
-          }
-        : null,
+            telegram: row.partner_telegram,
+            email: row.partner_email,
+          },
 
-      offer: row.offer_id
-        ? {
+          offer: {
             id: row.offer_id,
             name: row.offer_name,
             description: row.offer_description,
-          }
-        : null,
+          },
 
-      team: row.team_id
-        ? {
+          team: {
             id: row.team_id_full,
             name: row.team_name,
-          }
-        : null,
+          },
 
-      geo: row.geo_id
-        ? {
+          geo: {
             id: row.geo_id,
             name: row.geo_name,
             country_code: row.geo_country_code,
-          }
-        : null,
+          },
 
-      stats: row.has_stats
-        ? {
-            id: row.stats_id,
-            spend: parseFloat(row.spend) || 0,
-            installs: parseInt(row.installs) || 0,
-            regs: parseInt(row.regs) || 0,
-            deps: parseInt(row.deps) || 0,
-            verified_deps: parseInt(row.verified_deps) || 0,
-            cpa: parseFloat(row.stats_cpa) || 0,
-            notes: row.stats_notes,
-            roi: row.roi ? parseFloat(row.roi) : 0,
-            inst2reg: row.inst2reg ? parseFloat(row.inst2reg) : 0,
-            reg2dep: row.reg2dep ? parseFloat(row.reg2dep) : 0,
-            created_at: row.stats_created_at,
-            updated_at: row.stats_updated_at,
-          }
-        : null,
+          user: {
+            id: row.user_id,
+            username: row.username,
+            first_name: row.first_name,
+            last_name: row.last_name,
+            full_name: row.user_full_name,
+            role: row.user_role,
+          },
 
-      users: includeUsers ? usersData[row.flow_id] || [] : undefined,
-      has_stats: row.has_stats,
-    }));
+          stats: row.has_stats
+            ? {
+                id: row.stats_id,
+                spend: parseFloat(row.spend) || 0,
+                installs: parseInt(row.installs) || 0,
+                regs: parseInt(row.regs) || 0,
+                deps: parseInt(row.deps) || 0,
+                verified_deps: parseInt(row.verified_deps) || 0,
+                cpa: parseFloat(row.stats_cpa) || 0,
+                deposit_amount: parseFloat(row.deposit_amount) || 0,
+                redep_count: parseInt(row.redep_count) || 0,
+                unique_redep_count: parseInt(row.unique_redep_count) || 0,
+                roi: parseFloat(row.roi) || 0,
+                inst2reg: parseFloat(row.inst2reg) || 0,
+                reg2dep: parseFloat(row.reg2dep) || 0,
+                notes: row.stats_notes,
+                created_at: row.stats_created_at,
+                updated_at: row.stats_updated_at,
+              }
+            : null,
 
-    console.log(`Повертаємо ${flows.length} потоків з ${totalCount} загальних`);
+          has_stats: row.has_stats,
+        });
+      }
+    });
 
     return {
-      flows,
-      totalCount,
+      flows: Array.from(flowsMap.values()),
+      totalCount: parseInt(countResult.rows[0].total) || 0,
     };
   } catch (error) {
-    console.error("Помилка в getDailyFlowsStats:", error);
-    console.error("Stack trace:", error.stack);
-    throw new Error(`Помилка бази даних: ${error.message}`);
+    console.error("Помилка при отриманні денної статистики:", error);
+    throw error;
   }
 };
 
 /**
- * Отримання статистики користувача за місяць по днях
+ * ОНОВЛЕНО: Перевірка доступу користувача до редагування статистики потоку
+ */
+const checkUserAccess = async (flow_id, user_id, user_role) => {
+  // Admin, bizdev, teamlead можуть переглядати та редагувати всю статистику
+  if (["admin", "bizdev", "teamlead"].includes(user_role)) {
+    const query = `SELECT 1 FROM flows WHERE id = $1 LIMIT 1`;
+    const result = await db.query(query, [flow_id]);
+    return result.rows.length > 0;
+  }
+
+  // Buyer може переглядати та редагувати лише свою статистику
+  if (user_role === "buyer") {
+    const query = `
+      SELECT 1 FROM flow_users fu
+      WHERE fu.flow_id = $1 AND fu.user_id = $2 AND fu.status = 'active'
+      LIMIT 1
+    `;
+    const result = await db.query(query, [flow_id, user_id]);
+    return result.rows.length > 0;
+  }
+
+  return false;
+};
+
+/**
+ * ОНОВЛЕНО: Отримання статистики потоку з фільтрацією по користувачах
+ */
+const getFlowStats = async (
+  flow_id,
+  options = {},
+  requesting_user_id,
+  user_role
+) => {
+  const { month, year, dateFrom, dateTo, user_id } = options;
+
+  let conditions = ["fs.flow_id = $1"];
+  let params = [flow_id];
+  let paramIndex = 1;
+
+  // Фільтрація по користувачах в залежності від ролі
+  if (user_role === "buyer") {
+    // Buyer бачить лише свою статистику
+    paramIndex++;
+    conditions.push(`fs.user_id = $${paramIndex}`);
+    params.push(requesting_user_id);
+  } else if (user_id && ["admin", "bizdev", "teamlead"].includes(user_role)) {
+    // Інші ролі можуть фільтрувати по конкретному користувачу
+    paramIndex++;
+    conditions.push(`fs.user_id = $${paramIndex}`);
+    params.push(user_id);
+  }
+
+  // Фільтри по даті
+  if (month && year) {
+    paramIndex++;
+    conditions.push(`fs.month = $${paramIndex}`);
+    params.push(month);
+
+    paramIndex++;
+    conditions.push(`fs.year = $${paramIndex}`);
+    params.push(year);
+  }
+
+  if (dateFrom) {
+    const fromDate = new Date(dateFrom);
+    paramIndex++;
+    conditions.push(
+      `DATE(fs.year || '-' || fs.month || '-' || fs.day) >= $${paramIndex}`
+    );
+    params.push(fromDate.toISOString().split("T")[0]);
+  }
+
+  if (dateTo) {
+    const toDate = new Date(dateTo);
+    paramIndex++;
+    conditions.push(
+      `DATE(fs.year || '-' || fs.month || '-' || fs.day) <= $${paramIndex}`
+    );
+    params.push(toDate.toISOString().split("T")[0]);
+  }
+
+  const whereClause = conditions.join(" AND ");
+
+  const query = `
+    SELECT 
+      fs.*,
+      u.username,
+      u.first_name,
+      u.last_name,
+      CONCAT(u.first_name, ' ', u.last_name) as user_full_name,
+      
+      CASE 
+        WHEN fs.spend > 0 AND fs.deps > 0 AND fs.cpa > 0
+        THEN ROUND(((fs.deps * fs.cpa - fs.spend) / fs.spend * 100)::numeric, 2)
+        ELSE 0 
+      END as roi,
+      CASE 
+        WHEN fs.installs > 0 
+        THEN ROUND((fs.regs::numeric / fs.installs * 100)::numeric, 2)
+        ELSE 0 
+      END as inst2reg,
+      CASE 
+        WHEN fs.regs > 0 
+        THEN ROUND((fs.deps::numeric / fs.regs * 100)::numeric, 2)
+        ELSE 0 
+      END as reg2dep
+    FROM flow_stats fs
+    JOIN users u ON fs.user_id = u.id
+    WHERE ${whereClause}
+    ORDER BY fs.year DESC, fs.month DESC, fs.day DESC, u.first_name, u.last_name
+  `;
+
+  try {
+    const result = await db.query(query, params);
+    return result.rows;
+  } catch (error) {
+    console.error("Помилка при отриманні статистики потоку:", error);
+    throw error;
+  }
+};
+
+/**
+ * Видалення статистики за день (ОНОВЛЕНО з урахуванням user_id)
+ */
+const deleteFlowStat = async (flow_id, user_id, day, month, year) => {
+  const query = `
+    DELETE FROM flow_stats 
+    WHERE flow_id = $1 AND user_id = $2 AND day = $3 AND month = $4 AND year = $5
+  `;
+
+  try {
+    const result = await db.query(query, [flow_id, user_id, day, month, year]);
+    return result.rowCount > 0;
+  } catch (error) {
+    console.error("Помилка при видаленні статистики:", error);
+    throw error;
+  }
+};
+
+/**
+ * ОНОВЛЕНО: Отримання статистики користувача за місяць по днях з урахуванням user_id
  * @param {number} userId - ID користувача
  * @param {Object} options - Опції фільтрації
  * @param {number} options.month - Місяць (1-12)
  * @param {number} options.year - Рік
+ * @param {number} requesting_user_id - ID користувача, що робить запит
+ * @param {string} user_role - Роль користувача, що робить запит
  * @returns {Promise<Object>} Статистика по днях + загальна статистика
  */
-const getUserMonthlyStats = async (userId, options = {}) => {
+const getUserMonthlyStats = async (
+  userId,
+  options = {},
+  requesting_user_id,
+  user_role
+) => {
   const { month, year } = options;
 
   if (!month || !year) {
     throw new Error("Місяць та рік є обов'язковими параметрами");
   }
 
+  // Перевірка прав доступу
+  if (user_role === "buyer" && userId !== requesting_user_id) {
+    throw new Error("Buyer може переглядати лише свою статистику");
+  }
+
   try {
     // Отримуємо кількість днів у місяці
     const daysInMonth = new Date(year, month, 0).getDate();
 
-    // Основний запит для отримання статистики по днях
+    // ОНОВЛЕНО: Основний запит з урахуванням user_id в flow_stats
     const dailyStatsQuery = `
       WITH days_series AS (
         SELECT generate_series(1, $3) as day
@@ -493,6 +607,9 @@ const getUserMonthlyStats = async (userId, options = {}) => {
           COALESCE(SUM(fs.regs), 0) as total_regs,
           COALESCE(SUM(fs.deps), 0) as total_deps,
           COALESCE(SUM(fs.verified_deps), 0) as total_verified_deps,
+          COALESCE(SUM(fs.deposit_amount), 0) as total_deposit_amount,
+          COALESCE(SUM(fs.redep_count), 0) as total_redep_count,
+          COALESCE(SUM(fs.unique_redep_count), 0) as total_unique_redep_count,
           COALESCE(AVG(fs.cpa), 0) as avg_cpa,
           COUNT(fs.id) as flows_with_stats,
           COUNT(DISTINCT fs.flow_id) as active_flows_count
@@ -500,6 +617,7 @@ const getUserMonthlyStats = async (userId, options = {}) => {
         LEFT JOIN flow_stats fs ON ds.day = fs.day 
           AND fs.month = $2 
           AND fs.year = $4
+          AND fs.user_id = $1
           AND fs.flow_id IN (SELECT flow_id FROM user_flows)
         GROUP BY ds.day
       )
@@ -510,6 +628,9 @@ const getUserMonthlyStats = async (userId, options = {}) => {
         total_regs,
         total_deps,
         total_verified_deps,
+        total_deposit_amount,
+        total_redep_count,
+        total_unique_redep_count,
         avg_cpa,
         flows_with_stats,
         active_flows_count,
@@ -545,7 +666,7 @@ const getUserMonthlyStats = async (userId, options = {}) => {
       year,
     ]);
 
-    // Загальна статистика за місяць
+    // ОНОВЛЕНО: Загальна статистика за місяць з новими полями
     const summaryQuery = `
       SELECT 
         COUNT(DISTINCT f.id) as total_user_flows,
@@ -555,6 +676,9 @@ const getUserMonthlyStats = async (userId, options = {}) => {
         COALESCE(SUM(fs.regs), 0) as total_regs,
         COALESCE(SUM(fs.deps), 0) as total_deps,
         COALESCE(SUM(fs.verified_deps), 0) as total_verified_deps,
+        COALESCE(SUM(fs.deposit_amount), 0) as total_deposit_amount,
+        COALESCE(SUM(fs.redep_count), 0) as total_redep_count,
+        COALESCE(SUM(fs.unique_redep_count), 0) as total_unique_redep_count,
         COALESCE(AVG(fs.cpa), 0) as avg_cpa,
         COUNT(fs.id) as total_stats_entries,
         COUNT(DISTINCT fs.flow_id) as flows_with_activity,
@@ -565,6 +689,7 @@ const getUserMonthlyStats = async (userId, options = {}) => {
          JOIN flows f2 ON fs2.flow_id = f2.id
          JOIN flow_users fu2 ON f2.id = fu2.flow_id
          WHERE fu2.user_id = $1 AND fu2.status = 'active'
+         AND fs2.user_id = $1
          AND fs2.month = $2 AND fs2.year = $3
          AND fs2.spend > 0 AND fs2.deps > 0 AND fs2.cpa > 0
          ORDER BY ((fs2.deps * fs2.cpa - fs2.spend) / fs2.spend * 100) DESC
@@ -574,6 +699,7 @@ const getUserMonthlyStats = async (userId, options = {}) => {
          JOIN flows f2 ON fs2.flow_id = f2.id
          JOIN flow_users fu2 ON f2.id = fu2.flow_id
          WHERE fu2.user_id = $1 AND fu2.status = 'active'
+         AND fs2.user_id = $1
          AND fs2.month = $2 AND fs2.year = $3
          AND fs2.spend > 0 AND fs2.deps > 0 AND fs2.cpa > 0
          ORDER BY ((fs2.deps * fs2.cpa - fs2.spend) / fs2.spend * 100) ASC
@@ -582,6 +708,7 @@ const getUserMonthlyStats = async (userId, options = {}) => {
       JOIN flow_users fu ON f.id = fu.flow_id
       LEFT JOIN offers o ON f.offer_id = o.id
       LEFT JOIN flow_stats fs ON f.id = fs.flow_id 
+        AND fs.user_id = $1
         AND fs.month = $2 AND fs.year = $3
       WHERE fu.user_id = $1 AND fu.status = 'active'
     `;
@@ -589,7 +716,7 @@ const getUserMonthlyStats = async (userId, options = {}) => {
     const summaryResult = await db.query(summaryQuery, [userId, month, year]);
     const summary = summaryResult.rows[0];
 
-    // Форматуємо результат
+    // Форматуємо результат з новими полями
     const dailyStats = dailyResult.rows.map((row) => ({
       day: parseInt(row.day),
       date: `${year}-${String(month).padStart(2, "0")}-${String(
@@ -601,6 +728,9 @@ const getUserMonthlyStats = async (userId, options = {}) => {
         regs: parseInt(row.total_regs) || 0,
         deps: parseInt(row.total_deps) || 0,
         verified_deps: parseInt(row.total_verified_deps) || 0,
+        deposit_amount: parseFloat(row.total_deposit_amount) || 0,
+        redep_count: parseInt(row.total_redep_count) || 0,
+        unique_redep_count: parseInt(row.total_unique_redep_count) || 0,
         avg_cpa: parseFloat(row.avg_cpa) || 0,
       },
       calculated: {
@@ -616,13 +746,16 @@ const getUserMonthlyStats = async (userId, options = {}) => {
       },
     }));
 
-    // Обчислюємо загальні метрики
+    // Обчислюємо загальні метрики з новими полями
     const totalMetrics = {
       spend: parseFloat(summary.total_spend) || 0,
       installs: parseInt(summary.total_installs) || 0,
       regs: parseInt(summary.total_regs) || 0,
       deps: parseInt(summary.total_deps) || 0,
       verified_deps: parseInt(summary.total_verified_deps) || 0,
+      deposit_amount: parseFloat(summary.total_deposit_amount) || 0,
+      redep_count: parseInt(summary.total_redep_count) || 0,
+      unique_redep_count: parseInt(summary.total_unique_redep_count) || 0,
       avg_cpa: parseFloat(summary.avg_cpa) || 0,
     };
 
@@ -687,25 +820,37 @@ const getUserMonthlyStats = async (userId, options = {}) => {
 };
 
 /**
- * Отримання статистики команди за місяць по днях
+ * ОНОВЛЕНО: Отримання статистики команди за місяць по днях з урахуванням user_id
  * @param {number} teamId - ID команди
  * @param {Object} options - Опції фільтрації
  * @param {number} options.month - Місяць (1-12)
  * @param {number} options.year - Рік
+ * @param {number} requesting_user_id - ID користувача, що робить запит
+ * @param {string} user_role - Роль користувача, що робить запит
  * @returns {Promise<Object>} Статистика по днях + загальна статистика
  */
-const getTeamMonthlyStats = async (teamId, options = {}) => {
+const getTeamMonthlyStats = async (
+  teamId,
+  options = {},
+  requesting_user_id,
+  user_role
+) => {
   const { month, year } = options;
 
   if (!month || !year) {
     throw new Error("Місяць та рік є обов'язковими параметрами");
   }
 
+  // Перевірка прав доступу
+  if (user_role === "buyer") {
+    throw new Error("Buyer не має доступу до статистики команди");
+  }
+
   try {
     // Отримуємо кількість днів у місяці
     const daysInMonth = new Date(year, month, 0).getDate();
 
-    // Основний запит для отримання статистики по днях
+    // ОНОВЛЕНО: Основний запит з урахуванням user_id в flow_stats
     const dailyStatsQuery = `
       WITH days_series AS (
         SELECT generate_series(1, $3) as day
@@ -723,16 +868,18 @@ const getTeamMonthlyStats = async (teamId, options = {}) => {
           COALESCE(SUM(fs.regs), 0) as total_regs,
           COALESCE(SUM(fs.deps), 0) as total_deps,
           COALESCE(SUM(fs.verified_deps), 0) as total_verified_deps,
+          COALESCE(SUM(fs.deposit_amount), 0) as total_deposit_amount,
+          COALESCE(SUM(fs.redep_count), 0) as total_redep_count,
+          COALESCE(SUM(fs.unique_redep_count), 0) as total_unique_redep_count,
           COALESCE(AVG(fs.cpa), 0) as avg_cpa,
           COUNT(fs.id) as flows_with_stats,
           COUNT(DISTINCT fs.flow_id) as active_flows_count,
-          COUNT(DISTINCT fu.user_id) FILTER (WHERE fu.status = 'active') as active_users_count
+          COUNT(DISTINCT fs.user_id) as active_users_count
         FROM days_series ds
         LEFT JOIN flow_stats fs ON ds.day = fs.day 
           AND fs.month = $2 
           AND fs.year = $4
           AND fs.flow_id IN (SELECT flow_id FROM team_flows)
-        LEFT JOIN flow_users fu ON fs.flow_id = fu.flow_id AND fu.status = 'active'
         GROUP BY ds.day
       )
       SELECT 
@@ -742,6 +889,9 @@ const getTeamMonthlyStats = async (teamId, options = {}) => {
         total_regs,
         total_deps,
         total_verified_deps,
+        total_deposit_amount,
+        total_redep_count,
+        total_unique_redep_count,
         avg_cpa,
         flows_with_stats,
         active_flows_count,
@@ -778,18 +928,21 @@ const getTeamMonthlyStats = async (teamId, options = {}) => {
       year,
     ]);
 
-    // Загальна статистика за місяць
+    // ОНОВЛЕНО: Загальна статистика за місяць з новими полями
     const summaryQuery = `
       SELECT 
         t.name as team_name,
         COUNT(DISTINCT f.id) as total_team_flows,
         COUNT(DISTINCT f.id) FILTER (WHERE f.status = 'active') as active_team_flows,
-        COUNT(DISTINCT fu.user_id) FILTER (WHERE fu.status = 'active') as total_active_users,
+        COUNT(DISTINCT fs.user_id) as total_active_users,
         COALESCE(SUM(fs.spend), 0) as total_spend,
         COALESCE(SUM(fs.installs), 0) as total_installs,
         COALESCE(SUM(fs.regs), 0) as total_regs,
         COALESCE(SUM(fs.deps), 0) as total_deps,
         COALESCE(SUM(fs.verified_deps), 0) as total_verified_deps,
+        COALESCE(SUM(fs.deposit_amount), 0) as total_deposit_amount,
+        COALESCE(SUM(fs.redep_count), 0) as total_redep_count,
+        COALESCE(SUM(fs.unique_redep_count), 0) as total_unique_redep_count,
         COALESCE(AVG(fs.cpa), 0) as avg_cpa,
         COUNT(fs.id) as total_stats_entries,
         COUNT(DISTINCT fs.flow_id) as flows_with_activity,
@@ -813,18 +966,16 @@ const getTeamMonthlyStats = async (teamId, options = {}) => {
          ORDER BY ((fs2.deps * fs2.cpa - fs2.spend) / fs2.spend * 100) ASC
          LIMIT 1) as worst_roi_day,
         -- Найпродуктивніший користувач
-        (SELECT fu.user_id FROM flow_users fu 
-         JOIN flows f ON fu.flow_id = f.id
-         JOIN flow_stats fs ON f.id = fs.flow_id
-         WHERE f.team_id = $1 AND fu.status = 'active'
+        (SELECT fs.user_id FROM flow_stats fs 
+         JOIN flows f ON fs.flow_id = f.id
+         WHERE f.team_id = $1
          AND fs.month = $2 AND fs.year = $3
-         GROUP BY fu.user_id
+         GROUP BY fs.user_id
          ORDER BY SUM(fs.deps) DESC
          LIMIT 1) as top_user_id
       FROM teams t
       LEFT JOIN flows f ON t.id = f.team_id
       LEFT JOIN offers o ON f.offer_id = o.id
-      LEFT JOIN flow_users fu ON f.id = fu.flow_id
       LEFT JOIN flow_stats fs ON f.id = fs.flow_id 
         AND fs.month = $2 AND fs.year = $3
       WHERE t.id = $1
@@ -838,7 +989,7 @@ const getTeamMonthlyStats = async (teamId, options = {}) => {
       throw new Error("Команду не знайдено");
     }
 
-    // Отримуємо топ користувачів команди за місяць
+    // ОНОВЛЕНО: Отримуємо топ користувачів команди за місяць з новими метриками
     const topUsersQuery = `
       SELECT 
         u.id as user_id,
@@ -848,6 +999,9 @@ const getTeamMonthlyStats = async (teamId, options = {}) => {
         COALESCE(SUM(fs.spend), 0) as total_spend,
         COALESCE(SUM(fs.deps), 0) as total_deps,
         COALESCE(SUM(fs.verified_deps), 0) as total_verified_deps,
+        COALESCE(SUM(fs.deposit_amount), 0) as total_deposit_amount,
+        COALESCE(SUM(fs.redep_count), 0) as total_redep_count,
+        COALESCE(SUM(fs.unique_redep_count), 0) as total_unique_redep_count,
         COUNT(DISTINCT fs.flow_id) as active_flows,
         CASE 
           WHEN SUM(fs.spend) > 0 AND SUM(fs.deps) > 0 AND AVG(fs.cpa) > 0
@@ -855,11 +1009,9 @@ const getTeamMonthlyStats = async (teamId, options = {}) => {
           ELSE 0 
         END as roi
       FROM users u
-      JOIN flow_users fu ON u.id = fu.user_id
-      JOIN flows f ON fu.flow_id = f.id
-      LEFT JOIN flow_stats fs ON f.id = fs.flow_id 
-        AND fs.month = $2 AND fs.year = $3
-      WHERE f.team_id = $1 AND fu.status = 'active'
+      JOIN flow_stats fs ON u.id = fs.user_id
+      JOIN flows f ON fs.flow_id = f.id
+      WHERE f.team_id = $1 AND fs.month = $2 AND fs.year = $3
       GROUP BY u.id, u.username, u.first_name, u.last_name
       HAVING SUM(fs.deps) > 0
       ORDER BY total_deps DESC
@@ -868,7 +1020,7 @@ const getTeamMonthlyStats = async (teamId, options = {}) => {
 
     const topUsersResult = await db.query(topUsersQuery, [teamId, month, year]);
 
-    // Форматуємо результат
+    // Форматуємо результат з новими полями
     const dailyStats = dailyResult.rows.map((row) => ({
       day: parseInt(row.day),
       date: `${year}-${String(month).padStart(2, "0")}-${String(
@@ -880,6 +1032,9 @@ const getTeamMonthlyStats = async (teamId, options = {}) => {
         regs: parseInt(row.total_regs) || 0,
         deps: parseInt(row.total_deps) || 0,
         verified_deps: parseInt(row.total_verified_deps) || 0,
+        deposit_amount: parseFloat(row.total_deposit_amount) || 0,
+        redep_count: parseInt(row.total_redep_count) || 0,
+        unique_redep_count: parseInt(row.total_unique_redep_count) || 0,
         avg_cpa: parseFloat(row.avg_cpa) || 0,
       },
       calculated: {
@@ -896,13 +1051,16 @@ const getTeamMonthlyStats = async (teamId, options = {}) => {
       },
     }));
 
-    // Обчислюємо загальні метрики
+    // Обчислюємо загальні метрики з новими полями
     const totalMetrics = {
       spend: parseFloat(summary.total_spend) || 0,
       installs: parseInt(summary.total_installs) || 0,
       regs: parseInt(summary.total_regs) || 0,
       deps: parseInt(summary.total_deps) || 0,
       verified_deps: parseInt(summary.total_verified_deps) || 0,
+      deposit_amount: parseFloat(summary.total_deposit_amount) || 0,
+      redep_count: parseInt(summary.total_redep_count) || 0,
+      unique_redep_count: parseInt(summary.total_unique_redep_count) || 0,
       avg_cpa: parseFloat(summary.avg_cpa) || 0,
     };
 
@@ -948,6 +1106,9 @@ const getTeamMonthlyStats = async (teamId, options = {}) => {
         spend: parseFloat(user.total_spend) || 0,
         deps: parseInt(user.total_deps) || 0,
         verified_deps: parseInt(user.total_verified_deps) || 0,
+        deposit_amount: parseFloat(user.total_deposit_amount) || 0,
+        redep_count: parseInt(user.total_redep_count) || 0,
+        unique_redep_count: parseInt(user.total_unique_redep_count) || 0,
         roi: parseFloat(user.roi) || 0,
       },
       active_flows: parseInt(user.active_flows) || 0,
@@ -957,7 +1118,6 @@ const getTeamMonthlyStats = async (teamId, options = {}) => {
       team: {
         id: teamId,
         name: summary.team_name,
-        description: summary.team_description,
       },
       period: { month, year },
       daily_stats: dailyStats,
@@ -989,21 +1149,34 @@ const getTeamMonthlyStats = async (teamId, options = {}) => {
 };
 
 /**
- * Отримання всіх потоків із агрегованою статистикою за місяць для користувача
+ * ОНОВЛЕНО: Отримання всіх потоків із агрегованою статистикою за місяць для користувача
  * @param {number} userId - ID користувача
  * @param {Object} options - Опції фільтрації
  * @param {number} options.month - Місяць (1-12)
  * @param {number} options.year - Рік
+ * @param {number} requesting_user_id - ID користувача, що робить запит
+ * @param {string} user_role - Роль користувача, що робить запит
  * @returns {Promise<Object>} Список потоків з агрегованою статистикою
  */
-const getUserFlowsMonthlyStats = async (userId, options = {}) => {
+const getUserFlowsMonthlyStats = async (
+  userId,
+  options = {},
+  requesting_user_id,
+  user_role
+) => {
   const { month, year } = options;
 
   if (!month || !year) {
     throw new Error("Місяць та рік є обов'язковими параметрами");
   }
 
+  // Перевірка прав доступу
+  if (user_role === "buyer" && userId !== requesting_user_id) {
+    throw new Error("Buyer може переглядати лише свою статистику");
+  }
+
   try {
+    // ОНОВЛЕНО: запит з урахуванням user_id в flow_stats
     const flowsQuery = `
       SELECT 
         f.id as flow_id,
@@ -1012,6 +1185,8 @@ const getUserFlowsMonthlyStats = async (userId, options = {}) => {
         f.cpa as flow_cpa,
         f.currency as flow_currency,
         f.description as flow_description,
+        f.flow_type,
+        f.kpi_metric,
         
         -- Дані партнера
         p.id as partner_id,
@@ -1031,12 +1206,15 @@ const getUserFlowsMonthlyStats = async (userId, options = {}) => {
         g.name as geo_name,
         g.country_code as geo_country_code,
         
-        -- Агрегована статистика за місяць
+        -- ОНОВЛЕНО: Агрегована статистика за місяць з новими полями
         COALESCE(SUM(fs.spend), 0) as total_spend,
         COALESCE(SUM(fs.installs), 0) as total_installs,
         COALESCE(SUM(fs.regs), 0) as total_regs,
         COALESCE(SUM(fs.deps), 0) as total_deps,
         COALESCE(SUM(fs.verified_deps), 0) as total_verified_deps,
+        COALESCE(SUM(fs.deposit_amount), 0) as total_deposit_amount,
+        COALESCE(SUM(fs.redep_count), 0) as total_redep_count,
+        COALESCE(SUM(fs.unique_redep_count), 0) as total_unique_redep_count,
         COALESCE(AVG(fs.cpa), f.cpa) as avg_cpa,
         COUNT(fs.id) as days_with_stats,
         
@@ -1072,10 +1250,11 @@ const getUserFlowsMonthlyStats = async (userId, options = {}) => {
       LEFT JOIN teams t ON f.team_id = t.id
       LEFT JOIN geos g ON f.geo_id = g.id
       LEFT JOIN flow_stats fs ON f.id = fs.flow_id 
+        AND fs.user_id = $1
         AND fs.month = $2 AND fs.year = $3
       WHERE fu.user_id = $1 AND fu.status = 'active'
       GROUP BY 
-        f.id, f.name, f.status, f.cpa, f.currency, f.description,
+        f.id, f.name, f.status, f.cpa, f.currency, f.description, f.flow_type, f.kpi_metric,
         p.id, p.name, p.type,
         o.id, o.name,
         t.id, t.name,
@@ -1085,7 +1264,7 @@ const getUserFlowsMonthlyStats = async (userId, options = {}) => {
 
     const result = await db.query(flowsQuery, [userId, month, year]);
 
-    // Загальна статистика користувача за місяць
+    // ОНОВЛЕНО: Загальна статистика користувача за місяць з новими полями
     const userSummaryQuery = `
       SELECT 
         COUNT(DISTINCT f.id) as total_flows,
@@ -1095,6 +1274,9 @@ const getUserFlowsMonthlyStats = async (userId, options = {}) => {
         COALESCE(SUM(fs.regs), 0) as total_regs,
         COALESCE(SUM(fs.deps), 0) as total_deps,
         COALESCE(SUM(fs.verified_deps), 0) as total_verified_deps,
+        COALESCE(SUM(fs.deposit_amount), 0) as total_deposit_amount,
+        COALESCE(SUM(fs.redep_count), 0) as total_redep_count,
+        COALESCE(SUM(fs.unique_redep_count), 0) as total_unique_redep_count,
         COUNT(DISTINCT o.partner_id) as unique_partners,
         COUNT(DISTINCT f.team_id) as unique_teams,
         COUNT(DISTINCT f.geo_id) as unique_geos
@@ -1102,6 +1284,7 @@ const getUserFlowsMonthlyStats = async (userId, options = {}) => {
       JOIN flow_users fu ON f.id = fu.flow_id
       LEFT JOIN offers o ON f.offer_id = o.id
       LEFT JOIN flow_stats fs ON f.id = fs.flow_id 
+        AND fs.user_id = $1
         AND fs.month = $2 AND fs.year = $3
       WHERE fu.user_id = $1 AND fu.status = 'active'
     `;
@@ -1121,6 +1304,8 @@ const getUserFlowsMonthlyStats = async (userId, options = {}) => {
         cpa: parseFloat(row.flow_cpa) || 0,
         currency: row.flow_currency,
         description: row.flow_description,
+        flow_type: row.flow_type,
+        kpi_metric: row.kpi_metric,
       },
       partner: row.partner_id
         ? {
@@ -1154,6 +1339,9 @@ const getUserFlowsMonthlyStats = async (userId, options = {}) => {
         regs: parseInt(row.total_regs) || 0,
         deps: parseInt(row.total_deps) || 0,
         verified_deps: parseInt(row.total_verified_deps) || 0,
+        deposit_amount: parseFloat(row.total_deposit_amount) || 0,
+        redep_count: parseInt(row.total_redep_count) || 0,
+        unique_redep_count: parseInt(row.total_unique_redep_count) || 0,
         avg_cpa: parseFloat(row.avg_cpa) || 0,
         days_with_stats: parseInt(row.days_with_stats) || 0,
         roi: parseFloat(row.roi) || 0,
@@ -1164,13 +1352,16 @@ const getUserFlowsMonthlyStats = async (userId, options = {}) => {
       },
     }));
 
-    // Обчислюємо загальні метрики
+    // Обчислюємо загальні метрики з новими полями
     const totalMetrics = {
       spend: parseFloat(summary.total_spend) || 0,
       installs: parseInt(summary.total_installs) || 0,
       regs: parseInt(summary.total_regs) || 0,
       deps: parseInt(summary.total_deps) || 0,
       verified_deps: parseInt(summary.total_verified_deps) || 0,
+      deposit_amount: parseFloat(summary.total_deposit_amount) || 0,
+      redep_count: parseInt(summary.total_redep_count) || 0,
+      unique_redep_count: parseInt(summary.total_unique_redep_count) || 0,
     };
 
     return {
@@ -1226,21 +1417,34 @@ const getUserFlowsMonthlyStats = async (userId, options = {}) => {
 };
 
 /**
- * Отримання всіх потоків із агрегованою статистикою за місяць для команди
+ * ОНОВЛЕНО: Отримання всіх потоків із агрегованою статистикою за місяць для команди
  * @param {number} teamId - ID команди
  * @param {Object} options - Опції фільтрації
  * @param {number} options.month - Місяць (1-12)
  * @param {number} options.year - Рік
+ * @param {number} requesting_user_id - ID користувача, що робить запит
+ * @param {string} user_role - Роль користувача, що робить запит
  * @returns {Promise<Object>} Список потоків з агрегованою статистикою
  */
-const getTeamFlowsMonthlyStats = async (teamId, options = {}) => {
+const getTeamFlowsMonthlyStats = async (
+  teamId,
+  options = {},
+  requesting_user_id,
+  user_role
+) => {
   const { month, year } = options;
 
   if (!month || !year) {
     throw new Error("Місяць та рік є обов'язковими параметрами");
   }
 
+  // Перевірка прав доступу
+  if (user_role === "buyer") {
+    throw new Error("Buyer не має доступу до статистики команди");
+  }
+
   try {
+    // ОНОВЛЕНО: запит з урахуванням user_id в flow_stats
     const flowsQuery = `
       SELECT 
         f.id as flow_id,
@@ -1249,6 +1453,8 @@ const getTeamFlowsMonthlyStats = async (teamId, options = {}) => {
         f.cpa as flow_cpa,
         f.currency as flow_currency,
         f.description as flow_description,
+        f.flow_type,
+        f.kpi_metric,
         
         -- Дані партнера
         p.id as partner_id,
@@ -1268,15 +1474,18 @@ const getTeamFlowsMonthlyStats = async (teamId, options = {}) => {
         g.name as geo_name,
         g.country_code as geo_country_code,
         
-        -- Агрегована статистика за місяць
+        -- ОНОВЛЕНО: Агрегована статистика за місяць з новими полями
         COALESCE(SUM(fs.spend), 0) as total_spend,
         COALESCE(SUM(fs.installs), 0) as total_installs,
         COALESCE(SUM(fs.regs), 0) as total_regs,
         COALESCE(SUM(fs.deps), 0) as total_deps,
         COALESCE(SUM(fs.verified_deps), 0) as total_verified_deps,
+        COALESCE(SUM(fs.deposit_amount), 0) as total_deposit_amount,
+        COALESCE(SUM(fs.redep_count), 0) as total_redep_count,
+        COALESCE(SUM(fs.unique_redep_count), 0) as total_unique_redep_count,
         COALESCE(AVG(fs.cpa), f.cpa) as avg_cpa,
         COUNT(fs.id) as days_with_stats,
-        COUNT(DISTINCT fu.user_id) FILTER (WHERE fu.status = 'active') as active_users_count,
+        COUNT(DISTINCT fs.user_id) as active_users_count,
         
         -- Обчислювальні поля
         CASE 
@@ -1305,9 +1514,8 @@ const getTeamFlowsMonthlyStats = async (teamId, options = {}) => {
         
         -- Топ користувач потоку
         (SELECT u.username FROM users u
-         JOIN flow_users fu2 ON u.id = fu2.user_id
-         JOIN flow_stats fs2 ON fu2.flow_id = fs2.flow_id
-         WHERE fu2.flow_id = f.id AND fu2.status = 'active'
+         JOIN flow_stats fs2 ON u.id = fs2.user_id
+         WHERE fs2.flow_id = f.id
          AND fs2.month = $2 AND fs2.year = $3
          GROUP BY u.id, u.username
          ORDER BY SUM(fs2.deps) DESC
@@ -1318,12 +1526,11 @@ const getTeamFlowsMonthlyStats = async (teamId, options = {}) => {
       LEFT JOIN partners p ON o.partner_id = p.id
       LEFT JOIN teams t ON f.team_id = t.id
       LEFT JOIN geos g ON f.geo_id = g.id
-      LEFT JOIN flow_users fu ON f.id = fu.flow_id
       LEFT JOIN flow_stats fs ON f.id = fs.flow_id 
         AND fs.month = $2 AND fs.year = $3
       WHERE f.team_id = $1
       GROUP BY 
-        f.id, f.name, f.status, f.cpa, f.currency, f.description,
+        f.id, f.name, f.status, f.cpa, f.currency, f.description, f.flow_type, f.kpi_metric,
         p.id, p.name, p.type,
         o.id, o.name,
         t.id, t.name,
@@ -1333,25 +1540,27 @@ const getTeamFlowsMonthlyStats = async (teamId, options = {}) => {
 
     const result = await db.query(flowsQuery, [teamId, month, year]);
 
-    // Загальна статистика команди за місяць
+    // ОНОВЛЕНО: Загальна статистика команди за місяць з новими полями
     const teamSummaryQuery = `
       SELECT 
         t.name as team_name,
         COUNT(DISTINCT f.id) as total_flows,
         COUNT(DISTINCT f.id) FILTER (WHERE fs.id IS NOT NULL) as flows_with_activity,
-        COUNT(DISTINCT fu.user_id) FILTER (WHERE fu.status = 'active') as total_active_users,
+        COUNT(DISTINCT fs.user_id) as total_active_users,
         COALESCE(SUM(fs.spend), 0) as total_spend,
         COALESCE(SUM(fs.installs), 0) as total_installs,
         COALESCE(SUM(fs.regs), 0) as total_regs,
         COALESCE(SUM(fs.deps), 0) as total_deps,
         COALESCE(SUM(fs.verified_deps), 0) as total_verified_deps,
+        COALESCE(SUM(fs.deposit_amount), 0) as total_deposit_amount,
+        COALESCE(SUM(fs.redep_count), 0) as total_redep_count,
+        COALESCE(SUM(fs.unique_redep_count), 0) as total_unique_redep_count,
         COUNT(DISTINCT o.partner_id) as unique_partners,
         COUNT(DISTINCT o.id) as unique_offers,
         COUNT(DISTINCT f.geo_id) as unique_geos
       FROM teams t
       LEFT JOIN flows f ON t.id = f.team_id
       LEFT JOIN offers o ON f.offer_id = o.id
-      LEFT JOIN flow_users fu ON f.id = fu.flow_id
       LEFT JOIN flow_stats fs ON f.id = fs.flow_id 
         AND fs.month = $2 AND fs.year = $3
       WHERE t.id = $1
@@ -1377,6 +1586,8 @@ const getTeamFlowsMonthlyStats = async (teamId, options = {}) => {
         cpa: parseFloat(row.flow_cpa) || 0,
         currency: row.flow_currency,
         description: row.flow_description,
+        flow_type: row.flow_type,
+        kpi_metric: row.kpi_metric,
       },
       partner: row.partner_id
         ? {
@@ -1410,6 +1621,9 @@ const getTeamFlowsMonthlyStats = async (teamId, options = {}) => {
         regs: parseInt(row.total_regs) || 0,
         deps: parseInt(row.total_deps) || 0,
         verified_deps: parseInt(row.total_verified_deps) || 0,
+        deposit_amount: parseFloat(row.total_deposit_amount) || 0,
+        redep_count: parseInt(row.total_redep_count) || 0,
+        unique_redep_count: parseInt(row.total_unique_redep_count) || 0,
         avg_cpa: parseFloat(row.avg_cpa) || 0,
         days_with_stats: parseInt(row.days_with_stats) || 0,
         active_users_count: parseInt(row.active_users_count) || 0,
@@ -1422,20 +1636,22 @@ const getTeamFlowsMonthlyStats = async (teamId, options = {}) => {
       },
     }));
 
-    // Обчислюємо загальні метрики
+    // Обчислюємо загальні метрики з новими полями
     const totalMetrics = {
       spend: parseFloat(summary.total_spend) || 0,
       installs: parseInt(summary.total_installs) || 0,
       regs: parseInt(summary.total_regs) || 0,
       deps: parseInt(summary.total_deps) || 0,
       verified_deps: parseInt(summary.total_verified_deps) || 0,
+      deposit_amount: parseFloat(summary.total_deposit_amount) || 0,
+      redep_count: parseInt(summary.total_redep_count) || 0,
+      unique_redep_count: parseInt(summary.total_unique_redep_count) || 0,
     };
 
     return {
       team: {
         id: teamId,
         name: summary.team_name,
-        description: summary.team_description,
       },
       period: { month, year },
       flows,
@@ -1489,7 +1705,7 @@ const getTeamFlowsMonthlyStats = async (teamId, options = {}) => {
 };
 
 /**
- * Отримання загальної статистики компанії за місяць (P/L)
+ * ОНОВЛЕНО: Отримання загальної статистики компанії за місяць (P/L) з урахуванням user_id
  * @param {Object} options - Опції фільтрації
  * @param {number} options.month - Місяць (1-12)
  * @param {number} options.year - Рік
@@ -1503,7 +1719,7 @@ const getCompanyMonthlyStats = async (options = {}) => {
   }
 
   try {
-    // Загальна статистика компанії
+    // ОНОВЛЕНО: Загальна статистика компанії з новими полями
     const companyStatsQuery = `
       SELECT 
         -- Основні метрики
@@ -1512,13 +1728,16 @@ const getCompanyMonthlyStats = async (options = {}) => {
         COALESCE(SUM(fs.regs), 0) as total_regs,
         COALESCE(SUM(fs.deps), 0) as total_deps,
         COALESCE(SUM(fs.verified_deps), 0) as total_verified_deps,
+        COALESCE(SUM(fs.deposit_amount), 0) as total_deposit_amount,
+        COALESCE(SUM(fs.redep_count), 0) as total_redep_count,
+        COALESCE(SUM(fs.unique_redep_count), 0) as total_unique_redep_count,
         COALESCE(AVG(fs.cpa), 0) as avg_cpa,
         
         -- Загальна кількість
         COUNT(DISTINCT f.id) as total_flows,
         COUNT(DISTINCT f.id) FILTER (WHERE f.status = 'active') as active_flows,
         COUNT(DISTINCT fs.flow_id) as flows_with_activity,
-        COUNT(DISTINCT fu.user_id) FILTER (WHERE fu.status = 'active') as total_active_users,
+        COUNT(DISTINCT fs.user_id) as total_active_users,
         COUNT(DISTINCT t.id) as total_teams,
         COUNT(DISTINCT o.partner_id) as total_partners,
         COUNT(DISTINCT o.id) as total_offers,
@@ -1542,7 +1761,6 @@ const getCompanyMonthlyStats = async (options = {}) => {
         END as avg_daily_deps
         
       FROM flows f
-      LEFT JOIN flow_users fu ON f.id = fu.flow_id
       LEFT JOIN offers o ON f.offer_id = o.id
       LEFT JOIN teams t ON f.team_id = t.id
       LEFT JOIN flow_stats fs ON f.id = fs.flow_id 
@@ -1552,16 +1770,19 @@ const getCompanyMonthlyStats = async (options = {}) => {
     const companyResult = await db.query(companyStatsQuery, [month, year]);
     const companyStats = companyResult.rows[0];
 
-    // Статистика по командах
+    // ОНОВЛЕНО: Статистика по командах з новими полями (продовження)
     const teamsStatsQuery = `
       SELECT 
         t.id as team_id,
         t.name as team_name,
         COUNT(DISTINCT f.id) as team_flows,
-        COUNT(DISTINCT fu.user_id) FILTER (WHERE fu.status = 'active') as team_users,
+        COUNT(DISTINCT fs.user_id) as team_users,
         COALESCE(SUM(fs.spend), 0) as team_spend,
         COALESCE(SUM(fs.deps), 0) as team_deps,
         COALESCE(SUM(fs.verified_deps), 0) as team_verified_deps,
+        COALESCE(SUM(fs.deposit_amount), 0) as team_deposit_amount,
+        COALESCE(SUM(fs.redep_count), 0) as team_redep_count,
+        COALESCE(SUM(fs.unique_redep_count), 0) as team_unique_redep_count,
         COALESCE(SUM(fs.deps * COALESCE(fs.cpa, f.cpa)), 0) as team_revenue,
         COALESCE(SUM(fs.deps * COALESCE(fs.cpa, f.cpa)) - SUM(fs.spend), 0) as team_profit,
         CASE 
@@ -1571,7 +1792,6 @@ const getCompanyMonthlyStats = async (options = {}) => {
         END as team_roi
       FROM teams t
       LEFT JOIN flows f ON t.id = f.team_id
-      LEFT JOIN flow_users fu ON f.id = fu.flow_id
       LEFT JOIN flow_stats fs ON f.id = fs.flow_id 
         AND fs.month = $1 AND fs.year = $2
       GROUP BY t.id, t.name
@@ -1581,7 +1801,7 @@ const getCompanyMonthlyStats = async (options = {}) => {
 
     const teamsResult = await db.query(teamsStatsQuery, [month, year]);
 
-    // Статистика по партнерах
+    // ОНОВЛЕНО: Статистика по партнерах з новими полями
     const partnersStatsQuery = `
       SELECT 
         p.id as partner_id,
@@ -1592,6 +1812,9 @@ const getCompanyMonthlyStats = async (options = {}) => {
         COALESCE(SUM(fs.spend), 0) as partner_spend,
         COALESCE(SUM(fs.deps), 0) as partner_deps,
         COALESCE(SUM(fs.verified_deps), 0) as partner_verified_deps,
+        COALESCE(SUM(fs.deposit_amount), 0) as partner_deposit_amount,
+        COALESCE(SUM(fs.redep_count), 0) as partner_redep_count,
+        COALESCE(SUM(fs.unique_redep_count), 0) as partner_unique_redep_count,
         COALESCE(SUM(fs.deps * COALESCE(fs.cpa, f.cpa)), 0) as partner_revenue,
         COALESCE(SUM(fs.deps * COALESCE(fs.cpa, f.cpa)) - SUM(fs.spend), 0) as partner_profit,
         CASE 
@@ -1612,7 +1835,7 @@ const getCompanyMonthlyStats = async (options = {}) => {
 
     const partnersResult = await db.query(partnersStatsQuery, [month, year]);
 
-    // Топ користувачі
+    // ОНОВЛЕНО: Топ користувачі з новими полями
     const topUsersQuery = `
       SELECT 
         u.id as user_id,
@@ -1624,6 +1847,9 @@ const getCompanyMonthlyStats = async (options = {}) => {
         COALESCE(SUM(fs.spend), 0) as user_spend,
         COALESCE(SUM(fs.deps), 0) as user_deps,
         COALESCE(SUM(fs.verified_deps), 0) as user_verified_deps,
+        COALESCE(SUM(fs.deposit_amount), 0) as user_deposit_amount,
+        COALESCE(SUM(fs.redep_count), 0) as user_redep_count,
+        COALESCE(SUM(fs.unique_redep_count), 0) as user_unique_redep_count,
         COALESCE(SUM(fs.deps * COALESCE(fs.cpa, f.cpa)), 0) as user_revenue,
         COALESCE(SUM(fs.deps * COALESCE(fs.cpa, f.cpa)) - SUM(fs.spend), 0) as user_profit,
         CASE 
@@ -1632,12 +1858,10 @@ const getCompanyMonthlyStats = async (options = {}) => {
           ELSE 0 
         END as user_roi
       FROM users u
-      JOIN flow_users fu ON u.id = fu.user_id
-      JOIN flows f ON fu.flow_id = f.id
+      JOIN flow_stats fs ON u.id = fs.user_id
+      JOIN flows f ON fs.flow_id = f.id
       LEFT JOIN teams t ON f.team_id = t.id
-      LEFT JOIN flow_stats fs ON f.id = fs.flow_id 
-        AND fs.month = $1 AND fs.year = $2
-      WHERE fu.status = 'active'
+      WHERE fs.month = $1 AND fs.year = $2
       GROUP BY u.id, u.username, u.first_name, u.last_name, t.name
       HAVING SUM(fs.deps) > 0
       ORDER BY user_profit DESC
@@ -1646,7 +1870,7 @@ const getCompanyMonthlyStats = async (options = {}) => {
 
     const topUsersResult = await db.query(topUsersQuery, [month, year]);
 
-    // Денна статистика за місяць
+    // ОНОВЛЕНО: Денна статистика за місяць з новими полями
     const dailyTrendsQuery = `
       SELECT 
         fs.day,
@@ -1655,13 +1879,15 @@ const getCompanyMonthlyStats = async (options = {}) => {
         COALESCE(SUM(fs.regs), 0) as day_regs,
         COALESCE(SUM(fs.deps), 0) as day_deps,
         COALESCE(SUM(fs.verified_deps), 0) as day_verified_deps,
+        COALESCE(SUM(fs.deposit_amount), 0) as day_deposit_amount,
+        COALESCE(SUM(fs.redep_count), 0) as day_redep_count,
+        COALESCE(SUM(fs.unique_redep_count), 0) as day_unique_redep_count,
         COALESCE(SUM(fs.deps * COALESCE(fs.cpa, f.cpa)), 0) as day_revenue,
         COALESCE(SUM(fs.deps * COALESCE(fs.cpa, f.cpa)) - SUM(fs.spend), 0) as day_profit,
         COUNT(DISTINCT fs.flow_id) as active_flows,
-        COUNT(DISTINCT fu.user_id) FILTER (WHERE fu.status = 'active') as active_users
+        COUNT(DISTINCT fs.user_id) as active_users
       FROM flow_stats fs
       JOIN flows f ON fs.flow_id = f.id
-      LEFT JOIN flow_users fu ON f.id = fu.flow_id
       WHERE fs.month = $1 AND fs.year = $2
       GROUP BY fs.day
       ORDER BY fs.day
@@ -1669,7 +1895,7 @@ const getCompanyMonthlyStats = async (options = {}) => {
 
     const dailyTrendsResult = await db.query(dailyTrendsQuery, [month, year]);
 
-    // Форматуємо результати
+    // Форматуємо результати з новими полями
     const totalSpend = parseFloat(companyStats.total_spend) || 0;
     const totalRevenue = parseFloat(companyStats.total_revenue) || 0;
     const totalProfit = parseFloat(companyStats.total_profit) || 0;
@@ -1684,6 +1910,9 @@ const getCompanyMonthlyStats = async (options = {}) => {
         spend: parseFloat(row.team_spend) || 0,
         deps: parseInt(row.team_deps) || 0,
         verified_deps: parseInt(row.team_verified_deps) || 0,
+        deposit_amount: parseFloat(row.team_deposit_amount) || 0,
+        redep_count: parseInt(row.team_redep_count) || 0,
+        unique_redep_count: parseInt(row.team_unique_redep_count) || 0,
         revenue: parseFloat(row.team_revenue) || 0,
         profit: parseFloat(row.team_profit) || 0,
         roi: parseFloat(row.team_roi) || 0,
@@ -1700,6 +1929,9 @@ const getCompanyMonthlyStats = async (options = {}) => {
         spend: parseFloat(row.partner_spend) || 0,
         deps: parseInt(row.partner_deps) || 0,
         verified_deps: parseInt(row.partner_verified_deps) || 0,
+        deposit_amount: parseFloat(row.partner_deposit_amount) || 0,
+        redep_count: parseInt(row.partner_redep_count) || 0,
+        unique_redep_count: parseInt(row.partner_unique_redep_count) || 0,
         revenue: parseFloat(row.partner_revenue) || 0,
         profit: parseFloat(row.partner_profit) || 0,
         roi: parseFloat(row.partner_roi) || 0,
@@ -1719,6 +1951,9 @@ const getCompanyMonthlyStats = async (options = {}) => {
         spend: parseFloat(row.user_spend) || 0,
         deps: parseInt(row.user_deps) || 0,
         verified_deps: parseInt(row.user_verified_deps) || 0,
+        deposit_amount: parseFloat(row.user_deposit_amount) || 0,
+        redep_count: parseInt(row.user_redep_count) || 0,
+        unique_redep_count: parseInt(row.user_unique_redep_count) || 0,
         revenue: parseFloat(row.user_revenue) || 0,
         profit: parseFloat(row.user_profit) || 0,
         roi: parseFloat(row.user_roi) || 0,
@@ -1736,6 +1971,9 @@ const getCompanyMonthlyStats = async (options = {}) => {
         regs: parseInt(row.day_regs) || 0,
         deps: parseInt(row.day_deps) || 0,
         verified_deps: parseInt(row.day_verified_deps) || 0,
+        deposit_amount: parseFloat(row.day_deposit_amount) || 0,
+        redep_count: parseInt(row.day_redep_count) || 0,
+        unique_redep_count: parseInt(row.day_unique_redep_count) || 0,
         revenue: parseFloat(row.day_revenue) || 0,
         profit: parseFloat(row.day_profit) || 0,
       },
@@ -1775,11 +2013,16 @@ const getCompanyMonthlyStats = async (options = {}) => {
         total_offers: parseInt(companyStats.total_offers) || 0,
         total_geos: parseInt(companyStats.total_geos) || 0,
 
-        // Маркетингові показники
+        // Маркетингові показники з новими полями
         total_installs: parseInt(companyStats.total_installs) || 0,
         total_regs: parseInt(companyStats.total_regs) || 0,
         total_deps: totalDeps,
         total_verified_deps: parseInt(companyStats.total_verified_deps) || 0,
+        total_deposit_amount:
+          parseFloat(companyStats.total_deposit_amount) || 0,
+        total_redep_count: parseInt(companyStats.total_redep_count) || 0,
+        total_unique_redep_count:
+          parseInt(companyStats.total_unique_redep_count) || 0,
         avg_cpa: parseFloat(companyStats.avg_cpa) || 0,
 
         // Конверсії
@@ -1888,206 +2131,142 @@ const getCompanyMonthlyStats = async (options = {}) => {
 };
 
 /**
- * Отримання статистики потоку за період
+ * ОНОВЛЕНО: Отримання агрегованої статистики за період з урахуванням user_id
  * @param {number} flow_id - ID потоку
- * @param {Object} options - Опції фільтрації
- * @param {number} [options.month] - Місяць (1-12)
- * @param {number} [options.year] - Рік
- * @param {string} [options.dateFrom] - Дата початку (YYYY-MM-DD)
- * @param {string} [options.dateTo] - Дата кінця (YYYY-MM-DD)
- * @returns {Promise<Array>} Масив статистики з обчислюваними метриками
+ * @param {Object} options - Опції фільтрації та групування
+ * @param {number} requesting_user_id - ID користувача, що робить запит
+ * @param {string} user_role - Роль користувача, що робить запит
+ * @returns {Promise<Object>} Агрегована статистика
  */
-const getFlowStats = async (flow_id, options = {}) => {
-  const { month, year, dateFrom, dateTo } = options;
+const getAggregatedStats = async (
+  flow_id,
+  options = {},
+  requesting_user_id,
+  user_role
+) => {
+  const { month, year, dateFrom, dateTo, user_id } = options;
 
-  const conditions = ["flow_id = $1"];
+  const conditions = ["fs.flow_id = $1"];
   const params = [flow_id];
   let paramIndex = 2;
 
-  // Фільтр за місяцем та роком
+  // Перевірка прав доступу та фільтрація по користувачах
+  if (user_role === "buyer") {
+    // Buyer бачить лише свою статистику
+    conditions.push(`fs.user_id = $${paramIndex++}`);
+    params.push(requesting_user_id);
+  } else if (user_id && ["admin", "bizdev", "teamlead"].includes(user_role)) {
+    // Інші ролі можуть фільтрувати по конкретному користувачу
+    conditions.push(`fs.user_id = $${paramIndex++}`);
+    params.push(user_id);
+  }
+
+  // Додаємо фільтри по даті
   if (month && year) {
-    conditions.push(`month = $${paramIndex++} AND year = $${paramIndex++}`);
+    conditions.push(
+      `fs.month = $${paramIndex++} AND fs.year = $${paramIndex++}`
+    );
     params.push(month, year);
   } else if (year) {
-    conditions.push(`year = $${paramIndex++}`);
+    conditions.push(`fs.year = $${paramIndex++}`);
     params.push(year);
   }
 
-  // Фільтр за діапазоном дат
   if (dateFrom) {
     const fromDate = new Date(dateFrom);
     conditions.push(
-      `(year > $${paramIndex++} OR (year = $${paramIndex} AND month > $${
-        paramIndex + 1
-      }) OR (year = $${paramIndex} AND month = $${paramIndex + 1} AND day >= $${
-        paramIndex + 2
-      }))`
+      `DATE(fs.year || '-' || fs.month || '-' || fs.day) >= $${paramIndex++}`
     );
-    params.push(
-      fromDate.getFullYear(),
-      fromDate.getFullYear(),
-      fromDate.getMonth() + 1,
-      fromDate.getFullYear(),
-      fromDate.getMonth() + 1,
-      fromDate.getDate()
-    );
-    paramIndex += 3;
+    params.push(fromDate.toISOString().split("T")[0]);
   }
 
   if (dateTo) {
     const toDate = new Date(dateTo);
     conditions.push(
-      `(year < $${paramIndex++} OR (year = $${paramIndex} AND month < $${
-        paramIndex + 1
-      }) OR (year = $${paramIndex} AND month = $${paramIndex + 1} AND day <= $${
-        paramIndex + 2
-      }))`
+      `DATE(fs.year || '-' || fs.month || '-' || fs.day) <= $${paramIndex++}`
     );
-    params.push(
-      toDate.getFullYear(),
-      toDate.getFullYear(),
-      toDate.getMonth() + 1,
-      toDate.getFullYear(),
-      toDate.getMonth() + 1,
-      toDate.getDate()
-    );
-    paramIndex += 3;
+    params.push(toDate.toISOString().split("T")[0]);
   }
 
-  const query = `
-    SELECT 
-      *,
-      -- Обчислювані метрики
-      CASE 
-        WHEN spend > 0 THEN ROUND(((deps * cpa - spend) / spend * 100)::numeric, 2)
-        ELSE 0 
-      END as roi,
-      CASE 
-        WHEN installs > 0 THEN ROUND((regs::numeric / installs * 100)::numeric, 2)
-        ELSE 0 
-      END as inst2reg,
-      CASE 
-        WHEN regs > 0 THEN ROUND((deps::numeric / regs * 100)::numeric, 2)
-        ELSE 0 
-      END as reg2dep,
-      -- Конкатенована дата для зручності
-      CONCAT(year, '-', LPAD(month::text, 2, '0'), '-', LPAD(day::text, 2, '0')) as full_date
-    FROM flow_stats
-    WHERE ${conditions.join(" AND ")}
-    ORDER BY year, month, day
-  `;
-
-  try {
-    const result = await db.query(query, params);
-    return result.rows;
-  } catch (error) {
-    console.error("Помилка при отриманні статистики потоку:", error);
-    throw error;
-  }
-};
-
-/**
- * Отримання агрегованої статистики за період
- * @param {number} flow_id - ID потоку
- * @param {Object} options - Опції фільтрації та групування
- * @returns {Promise<Object>} Агрегована статистика
- */
-const getAggregatedStats = async (flow_id, options = {}) => {
-  const { month, year, dateFrom, dateTo } = options;
-
-  const conditions = ["flow_id = $1"];
-  const params = [flow_id];
-  let paramIndex = 2;
-
-  // Додаємо ті ж умови фільтрації, що і в getFlowStats
-  if (month && year) {
-    conditions.push(`month = $${paramIndex++} AND year = $${paramIndex++}`);
-    params.push(month, year);
-  } else if (year) {
-    conditions.push(`year = $${paramIndex++}`);
-    params.push(year);
-  }
-
+  // ОНОВЛЕНО: запит з новими полями
   const query = `
     SELECT 
       COUNT(*) as total_days,
-      SUM(spend) as total_spend,
-      SUM(installs) as total_installs,
-      SUM(regs) as total_regs,
-      SUM(deps) as total_deps,
-      SUM(verified_deps) as total_verified_deps,
-      AVG(cpa) as avg_cpa,
+      COUNT(DISTINCT fs.user_id) as unique_users,
+      SUM(fs.spend) as total_spend,
+      SUM(fs.installs) as total_installs,
+      SUM(fs.regs) as total_regs,
+      SUM(fs.deps) as total_deps,
+      SUM(fs.verified_deps) as total_verified_deps,
+      SUM(fs.deposit_amount) as total_deposit_amount,
+      SUM(fs.redep_count) as total_redep_count,
+      SUM(fs.unique_redep_count) as total_unique_redep_count,
+      AVG(fs.cpa) as avg_cpa,
+      
       -- Агреговані метрики
       CASE 
-        WHEN SUM(spend) > 0 THEN ROUND(((SUM(deps * cpa) - SUM(spend)) / SUM(spend) * 100)::numeric, 2)
+        WHEN SUM(fs.spend) > 0 THEN ROUND(((SUM(fs.deps * fs.cpa) - SUM(fs.spend)) / SUM(fs.spend) * 100)::numeric, 2)
         ELSE 0 
       END as total_roi,
       CASE 
-        WHEN SUM(installs) > 0 THEN ROUND((SUM(regs)::numeric / SUM(installs) * 100)::numeric, 2)
+        WHEN SUM(fs.installs) > 0 THEN ROUND((SUM(fs.regs)::numeric / SUM(fs.installs) * 100)::numeric, 2)
         ELSE 0 
       END as total_inst2reg,
       CASE 
-        WHEN SUM(regs) > 0 THEN ROUND((SUM(deps)::numeric / SUM(regs) * 100)::numeric, 2)
+        WHEN SUM(fs.regs) > 0 THEN ROUND((SUM(fs.deps)::numeric / SUM(fs.regs) * 100)::numeric, 2)
         ELSE 0 
-      END as total_reg2dep
-    FROM flow_stats
+      END as total_reg2dep,
+      CASE 
+        WHEN SUM(fs.deps) > 0 THEN ROUND((SUM(fs.verified_deps)::numeric / SUM(fs.deps) * 100)::numeric, 2)
+        ELSE 0 
+      END as verification_rate,
+      
+      -- Мін/макс значення
+      MIN(fs.day) as first_activity_day,
+      MAX(fs.day) as last_activity_day,
+      MIN(fs.spend) FILTER (WHERE fs.spend > 0) as min_daily_spend,
+      MAX(fs.spend) as max_daily_spend,
+      MIN(fs.deps) FILTER (WHERE fs.deps > 0) as min_daily_deps,
+      MAX(fs.deps) as max_daily_deps
+      
+    FROM flow_stats fs
     WHERE ${conditions.join(" AND ")}
   `;
 
   try {
     const result = await db.query(query, params);
-    return result.rows[0];
+    const stats = result.rows[0];
+
+    return {
+      flow_id,
+      period: { month, year, dateFrom, dateTo },
+      user_filter: user_id,
+      aggregated: {
+        total_days: parseInt(stats.total_days) || 0,
+        unique_users: parseInt(stats.unique_users) || 0,
+        total_spend: parseFloat(stats.total_spend) || 0,
+        total_installs: parseInt(stats.total_installs) || 0,
+        total_regs: parseInt(stats.total_regs) || 0,
+        total_deps: parseInt(stats.total_deps) || 0,
+        total_verified_deps: parseInt(stats.total_verified_deps) || 0,
+        total_deposit_amount: parseFloat(stats.total_deposit_amount) || 0,
+        total_redep_count: parseInt(stats.total_redep_count) || 0,
+        total_unique_redep_count: parseInt(stats.total_unique_redep_count) || 0,
+        avg_cpa: parseFloat(stats.avg_cpa) || 0,
+        total_roi: parseFloat(stats.total_roi) || 0,
+        total_inst2reg: parseFloat(stats.total_inst2reg) || 0,
+        total_reg2dep: parseFloat(stats.total_reg2dep) || 0,
+        verification_rate: parseFloat(stats.verification_rate) || 0,
+        first_activity_day: stats.first_activity_day,
+        last_activity_day: stats.last_activity_day,
+        min_daily_spend: parseFloat(stats.min_daily_spend) || 0,
+        max_daily_spend: parseFloat(stats.max_daily_spend) || 0,
+        min_daily_deps: parseInt(stats.min_daily_deps) || 0,
+        max_daily_deps: parseInt(stats.max_daily_deps) || 0,
+      },
+    };
   } catch (error) {
     console.error("Помилка при отриманні агрегованої статистики:", error);
-    throw error;
-  }
-};
-
-/**
- * Видалення статистики за день
- * @param {number} flow_id - ID потоку
- * @param {number} day - День
- * @param {number} month - Місяць
- * @param {number} year - Рік
- * @returns {Promise<boolean>} Успішність видалення
- */
-const deleteFlowStat = async (flow_id, day, month, year) => {
-  const query = `
-    DELETE FROM flow_stats 
-    WHERE flow_id = $1 AND day = $2 AND month = $3 AND year = $4
-  `;
-
-  try {
-    const result = await db.query(query, [flow_id, day, month, year]);
-    return result.rowCount > 0;
-  } catch (error) {
-    console.error("Помилка при видаленні статистики:", error);
-    throw error;
-  }
-};
-
-/**
- * Перевірка доступу користувача до редагування статистики потоку
- * @param {number} flow_id - ID потоку
- * @param {number} user_id - ID користувача
- * @returns {Promise<boolean>} Чи має користувач доступ
- */
-const checkUserAccess = async (flow_id, user_id) => {
-  const query = `
-    SELECT 1 FROM flows f
-    LEFT JOIN flow_users fu ON f.id = fu.flow_id
-    WHERE f.id = $1 AND (
-      f.created_by = $2 OR 
-      fu.user_id = $2 AND fu.status = 'active'
-    )
-    LIMIT 1
-  `;
-
-  try {
-    const result = await db.query(query, [flow_id, user_id]);
-    return result.rows.length > 0;
-  } catch (error) {
-    console.error("Помилка при перевірці доступу:", error);
     throw error;
   }
 };

@@ -1,13 +1,16 @@
 const flowStatsModel = require("../models/flow.stats.model");
+const { validationResult } = require("express-validator");
+const db = require("../config/db");
 
 /**
- * Створення або оновлення статистики за день
+ * ОНОВЛЕНО: Створення або оновлення статистики за день з обов'язковим user_id
  * POST /api/flow-stats
  */
 const upsertFlowStat = async (req, res) => {
   try {
     const {
       flow_id,
+      user_id, // НОВИЙ ОБОВ'ЯЗКОВИЙ ПАРАМЕТР
       day,
       month,
       year,
@@ -16,23 +19,27 @@ const upsertFlowStat = async (req, res) => {
       regs,
       deps,
       verified_deps,
-      cpa,
+      deposit_amount, // НОВИЙ
+      redep_count, // НОВИЙ
+      unique_redep_count, // НОВИЙ
       notes,
     } = req.body;
 
-    // Валідація обов'язкових полів
-    if (!flow_id || !day || !month || !year) {
+    // ОНОВЛЕНО: валідація обов'язкових полів включно з user_id
+    if (!flow_id || !user_id || !day || !month || !year) {
       return res.status(400).json({
         success: false,
-        message: "Обов'язкові поля: flow_id, day, month, year",
+        message: "Обов'язкові поля: flow_id, user_id, day, month, year",
       });
     }
 
-    // Перевірка доступу користувача до потоку
+    // ОНОВЛЕНО: перевірка доступу з урахуванням ролей
     const hasAccess = await flowStatsModel.checkUserAccess(
       flow_id,
-      req.user.id
+      req.user.id,
+      req.user.role
     );
+
     if (!hasAccess) {
       return res.status(403).json({
         success: false,
@@ -40,8 +47,17 @@ const upsertFlowStat = async (req, res) => {
       });
     }
 
+    // Додаткова перевірка: buyer може створювати статистику лише для себе
+    if (req.user.role === "buyer" && user_id !== req.user.id) {
+      return res.status(403).json({
+        success: false,
+        message: "Buyer може створювати статистику лише для себе",
+      });
+    }
+
     const statData = {
       flow_id,
+      user_id,
       day,
       month,
       year,
@@ -50,7 +66,9 @@ const upsertFlowStat = async (req, res) => {
       regs,
       deps,
       verified_deps,
-      cpa,
+      deposit_amount, // НОВИЙ
+      redep_count, // НОВИЙ
+      unique_redep_count, // НОВИЙ
       notes,
       updated_by: req.user.id,
     };
@@ -66,19 +84,18 @@ const upsertFlowStat = async (req, res) => {
     console.error("Помилка при збереженні статистики:", error);
     res.status(500).json({
       success: false,
-      message: "Внутрішня помилка сервера",
+      message: error.message || "Внутрішня помилка сервера",
       error: process.env.NODE_ENV === "development" ? error.message : undefined,
     });
   }
 };
 
 /**
- * Отримання всіх потоків зі статистикою за певний день
+ * ОНОВЛЕНО: Отримання всіх потоків зі статистикою за певний день з урахуванням user_id
  * GET /api/flow-stats/daily/:year/:month/:day
  */
 const getDailyFlowsStats = async (req, res) => {
   try {
-    const { validationResult } = require("express-validator");
     const errors = validationResult(req);
 
     if (!errors.isEmpty()) {
@@ -125,7 +142,20 @@ const getDailyFlowsStats = async (req, res) => {
         : undefined,
       status: req.query.status,
       teamId: req.query.teamId ? parseInt(req.query.teamId) : undefined,
-      userId: req.query.userId ? parseInt(req.query.userId) : undefined,
+      // ОНОВЛЕНО: фільтрація по користувачах з урахуванням ролей
+      userId: (() => {
+        if (req.user.role === "buyer") {
+          // Buyer бачить лише свою статистику
+          return req.user.id;
+        } else if (
+          req.query.userId &&
+          ["admin", "bizdev", "teamlead"].includes(req.user.role)
+        ) {
+          // Інші ролі можуть фільтрувати по конкретному користувачу
+          return parseInt(req.query.userId);
+        }
+        return undefined;
+      })(),
       onlyActive: req.query.onlyActive === "true",
       includeUsers: true,
       // Пагінація
@@ -194,12 +224,14 @@ const getDailyFlowsStats = async (req, res) => {
 };
 
 /**
- * Отримання статистики потоку
+ * ОНОВЛЕНО: Отримання статистики потоку з фільтрацією по користувачах
  * GET /api/flow-stats/:flow_id
+ * Query params: month, year, dateFrom, dateTo, user_id
  */
 const getFlowStats = async (req, res) => {
   try {
     const flow_id = parseInt(req.params.flow_id);
+    const { month, year, dateFrom, dateTo, user_id } = req.query;
 
     if (isNaN(flow_id)) {
       return res.status(400).json({
@@ -211,8 +243,10 @@ const getFlowStats = async (req, res) => {
     // Перевірка доступу
     const hasAccess = await flowStatsModel.checkUserAccess(
       flow_id,
-      req.user.id
+      req.user.id,
+      req.user.role
     );
+
     if (!hasAccess) {
       return res.status(403).json({
         success: false,
@@ -221,20 +255,31 @@ const getFlowStats = async (req, res) => {
     }
 
     const options = {
-      month: req.query.month ? parseInt(req.query.month) : undefined,
-      year: req.query.year ? parseInt(req.query.year) : undefined,
-      dateFrom: req.query.dateFrom,
-      dateTo: req.query.dateTo,
+      month: month ? parseInt(month) : undefined,
+      year: year ? parseInt(year) : undefined,
+      dateFrom,
+      dateTo,
+      user_id: user_id ? parseInt(user_id) : undefined,
     };
 
-    const stats = await flowStatsModel.getFlowStats(flow_id, options);
+    const stats = await flowStatsModel.getFlowStats(
+      flow_id,
+      options,
+      req.user.id,
+      req.user.role
+    );
 
     res.json({
       success: true,
-      data: stats,
+      data: {
+        flow_id,
+        filters: options,
+        stats,
+        total_records: stats.length,
+      },
     });
   } catch (error) {
-    console.error("Помилка при отриманні статистики:", error);
+    console.error("Помилка при отриманні статистики потоку:", error);
     res.status(500).json({
       success: false,
       message: "Внутрішня помилка сервера",
@@ -244,57 +289,38 @@ const getFlowStats = async (req, res) => {
 };
 
 /**
- * Отримання статистики користувача за місяць по днях
+ * ОНОВЛЕНО: Отримання статистики користувача за місяць по днях
  * GET /api/flow-stats/user/:userId/monthly/:year/:month
  */
 const getUserMonthlyStats = async (req, res) => {
   try {
     const userId = parseInt(req.params.userId);
-    const month = parseInt(req.params.month);
     const year = parseInt(req.params.year);
+    const month = parseInt(req.params.month);
 
-    // Валідація параметрів
-    if (isNaN(userId) || userId <= 0) {
+    if (isNaN(userId) || isNaN(year) || isNaN(month)) {
       return res.status(400).json({
         success: false,
-        message: "Недійсний ID користувача",
+        message: "Недійсні параметри",
       });
     }
 
-    if (isNaN(month) || month < 1 || month > 12) {
-      return res.status(400).json({
-        success: false,
-        message: "Недійсний місяць. Має бути від 1 до 12",
-      });
-    }
-
-    if (isNaN(year) || year < 2020 || year > 2030) {
-      return res.status(400).json({
-        success: false,
-        message: "Недійсний рік. Має бути від 2020 до 2030",
-      });
-    }
-
-    // Перевіряємо права доступу
-    const requestingUserId = req.user.id;
-    const userRole = req.user.role;
-
-    // Дозволяємо тільки адмінам, тімлідам або самому користувачу переглядати статистику
-    if (
-      userRole !== "admin" &&
-      userRole !== "teamlead" &&
-      requestingUserId !== userId
-    ) {
+    // Перевірка прав доступу: користувач може дивитись лише свою статистику (buyer)
+    // або має права admin/bizdev/teamlead
+    if (req.user.role === "buyer" && userId !== req.user.id) {
       return res.status(403).json({
         success: false,
-        message: "Недостатньо прав для перегляду статистики цього користувача",
+        message: "Немає доступу до статистики цього користувача",
       });
     }
 
-    const stats = await flowStatsModel.getUserMonthlyStats(userId, {
-      month,
-      year,
-    });
+    const options = { month, year };
+    const stats = await flowStatsModel.getUserMonthlyStats(
+      userId,
+      options,
+      req.user.id,
+      req.user.role
+    );
 
     res.json({
       success: true,
@@ -306,77 +332,50 @@ const getUserMonthlyStats = async (req, res) => {
       },
     });
   } catch (error) {
-    console.error("Помилка отримання статистики користувача:", error);
-
-    // Обробка специфічних помилок
-    if (error.message.includes("Місяць та рік є обов'язковими")) {
-      return res.status(400).json({
-        success: false,
-        message: error.message,
-      });
-    }
-
+    console.error(
+      "Помилка при отриманні місячної статистики користувача:",
+      error
+    );
     res.status(500).json({
       success: false,
-      message: "Внутрішня помилка сервера при отриманні статистики користувача",
+      message: error.message || "Внутрішня помилка сервера",
       error: process.env.NODE_ENV === "development" ? error.message : undefined,
     });
   }
 };
 
 /**
- * Отримання статистики команди за місяць по днях
+ * ОНОВЛЕНО: Отримання статистики команди за місяць по днях
  * GET /api/flow-stats/team/:teamId/monthly/:year/:month
  */
 const getTeamMonthlyStats = async (req, res) => {
   try {
     const teamId = parseInt(req.params.teamId);
-    const month = parseInt(req.params.month);
     const year = parseInt(req.params.year);
+    const month = parseInt(req.params.month);
 
-    // Валідація параметрів
-    if (isNaN(teamId) || teamId <= 0) {
+    if (isNaN(teamId) || isNaN(year) || isNaN(month)) {
       return res.status(400).json({
         success: false,
-        message: "Недійсний ID команди",
+        message: "Недійсні параметри",
       });
     }
 
-    if (isNaN(month) || month < 1 || month > 12) {
-      return res.status(400).json({
+    // Перевірка прав доступу: лише admin/bizdev/teamlead
+    if (req.user.role === "buyer") {
+      return res.status(403).json({
         success: false,
-        message: "Недійсний місяць. Має бути від 1 до 12",
+        message: "Немає доступу до статистики команди",
       });
     }
 
-    if (isNaN(year) || year < 2020 || year > 2030) {
-      return res.status(400).json({
-        success: false,
-        message: "Недійсний рік. Має бути від 2020 до 2030",
-      });
-    }
-
-    // Перевіряємо права доступу
-    const userRole = req.user.role;
-    const userId = req.user.id;
-
-    // Дозволяємо адмінам та тімлідам переглядати статистику будь-якої команди
-    // Для інших користувачів перевіряємо, чи вони належать до цієї команди
-    if (userRole !== "admin" && userRole !== "teamlead") {
-      // Тут можна додати перевірку приналежності користувача до команди
-      // const userTeam = await getUserTeam(userId);
-      // if (userTeam.id !== teamId) {
-      //   return res.status(403).json({
-      //     success: false,
-      //     message: 'Недостатньо прав для перегляду статистики цієї команди'
-      //   });
-      // }
-    }
-
-    const stats = await flowStatsModel.getTeamMonthlyStats(teamId, {
-      month,
-      year,
-    });
+    const options = { month, year };
+    const stats = await flowStatsModel.getTeamMonthlyStats(
+      teamId,
+      options,
+      req.user.id,
+      req.user.role
+    );
 
     res.json({
       success: true,
@@ -388,82 +387,47 @@ const getTeamMonthlyStats = async (req, res) => {
       },
     });
   } catch (error) {
-    console.error("Помилка отримання статистики команди:", error);
-
-    // Обробка специфічних помилок
-    if (error.message.includes("Місяць та рік є обов'язковими")) {
-      return res.status(400).json({
-        success: false,
-        message: error.message,
-      });
-    }
-
-    if (error.message.includes("Команду не знайдено")) {
-      return res.status(404).json({
-        success: false,
-        message: "Команду не знайдено",
-      });
-    }
-
+    console.error("Помилка при отриманні місячної статистики команди:", error);
     res.status(500).json({
       success: false,
-      message: "Внутрішня помилка сервера при отриманні статистики команди",
+      message: error.message || "Внутрішня помилка сервера",
       error: process.env.NODE_ENV === "development" ? error.message : undefined,
     });
   }
 };
 
 /**
- * Отримання всіх потоків із агрегованою статистикою за місяць для користувача
+ * ОНОВЛЕНО: Отримання всіх потоків із агрегованою статистикою за місяць для користувача
  * GET /api/flow-stats/user/:userId/flows/monthly/:year/:month
  */
 const getUserFlowsMonthlyStats = async (req, res) => {
   try {
     const userId = parseInt(req.params.userId);
-    const month = parseInt(req.params.month);
     const year = parseInt(req.params.year);
+    const month = parseInt(req.params.month);
 
-    // Валідація параметрів
-    if (isNaN(userId) || userId <= 0) {
+    if (isNaN(userId) || isNaN(year) || isNaN(month)) {
       return res.status(400).json({
         success: false,
-        message: "Недійсний ID користувача",
+        message: "Недійсні параметри",
       });
     }
 
-    if (isNaN(month) || month < 1 || month > 12) {
-      return res.status(400).json({
-        success: false,
-        message: "Недійсний місяць. Має бути від 1 до 12",
-      });
-    }
-
-    if (isNaN(year) || year < 2020 || year > 2030) {
-      return res.status(400).json({
-        success: false,
-        message: "Недійсний рік. Має бути від 2020 до 2030",
-      });
-    }
-
-    // Перевіряємо права доступу
-    const requestingUserId = req.user.id;
-    const userRole = req.user.role;
-
-    if (
-      userRole !== "admin" &&
-      userRole !== "teamlead" &&
-      requestingUserId !== userId
-    ) {
+    // Перевірка прав доступу
+    if (req.user.role === "buyer" && userId !== req.user.id) {
       return res.status(403).json({
         success: false,
-        message: "Недостатньо прав для перегляду потоків цього користувача",
+        message: "Немає доступу до статистики цього користувача",
       });
     }
 
-    const stats = await flowStatsModel.getUserFlowsMonthlyStats(userId, {
-      month,
-      year,
-    });
+    const options = { month, year };
+    const stats = await flowStatsModel.getUserFlowsMonthlyStats(
+      userId,
+      options,
+      req.user.id,
+      req.user.role
+    );
 
     res.json({
       success: true,
@@ -476,69 +440,47 @@ const getUserFlowsMonthlyStats = async (req, res) => {
       },
     });
   } catch (error) {
-    console.error("Помилка отримання потоків користувача:", error);
-
-    if (error.message.includes("Місяць та рік є обов'язковими")) {
-      return res.status(400).json({
-        success: false,
-        message: error.message,
-      });
-    }
-
+    console.error("Помилка при отриманні потоків користувача:", error);
     res.status(500).json({
       success: false,
-      message: "Внутрішня помилка сервера при отриманні потоків користувача",
+      message: error.message || "Внутрішня помилка сервера",
       error: process.env.NODE_ENV === "development" ? error.message : undefined,
     });
   }
 };
 
 /**
- * Отримання всіх потоків із агрегованою статистикою за місяць для команди
+ * ОНОВЛЕНО: Отримання всіх потоків із агрегованою статистикою за місяць для команди
  * GET /api/flow-stats/team/:teamId/flows/monthly/:year/:month
  */
 const getTeamFlowsMonthlyStats = async (req, res) => {
   try {
     const teamId = parseInt(req.params.teamId);
-    const month = parseInt(req.params.month);
     const year = parseInt(req.params.year);
+    const month = parseInt(req.params.month);
 
-    // Валідація параметрів
-    if (isNaN(teamId) || teamId <= 0) {
+    if (isNaN(teamId) || isNaN(year) || isNaN(month)) {
       return res.status(400).json({
         success: false,
-        message: "Недійсний ID команди",
+        message: "Недійсні параметри",
       });
     }
 
-    if (isNaN(month) || month < 1 || month > 12) {
-      return res.status(400).json({
-        success: false,
-        message: "Недійсний місяць. Має бути від 1 до 12",
-      });
-    }
-
-    if (isNaN(year) || year < 2020 || year > 2030) {
-      return res.status(400).json({
-        success: false,
-        message: "Недійсний рік. Має бути від 2020 до 2030",
-      });
-    }
-
-    // Перевіряємо права доступу
-    const userRole = req.user.role;
-
-    if (userRole !== "admin" && userRole !== "teamlead") {
+    // Перевірка прав доступу: лише admin/bizdev/teamlead
+    if (req.user.role === "buyer") {
       return res.status(403).json({
         success: false,
-        message: "Недостатньо прав для перегляду потоків команди",
+        message: "Немає доступу до статистики команди",
       });
     }
 
-    const stats = await flowStatsModel.getTeamFlowsMonthlyStats(teamId, {
-      month,
-      year,
-    });
+    const options = { month, year };
+    const stats = await flowStatsModel.getTeamFlowsMonthlyStats(
+      teamId,
+      options,
+      req.user.id,
+      req.user.role
+    );
 
     res.json({
       success: true,
@@ -551,65 +493,41 @@ const getTeamFlowsMonthlyStats = async (req, res) => {
       },
     });
   } catch (error) {
-    console.error("Помилка отримання потоків команди:", error);
-
-    if (error.message.includes("Місяць та рік є обов'язковими")) {
-      return res.status(400).json({
-        success: false,
-        message: error.message,
-      });
-    }
-
-    if (error.message.includes("Команду не знайдено")) {
-      return res.status(404).json({
-        success: false,
-        message: "Команду не знайдено",
-      });
-    }
-
+    console.error("Помилка при отриманні потоків команди:", error);
     res.status(500).json({
       success: false,
-      message: "Внутрішня помилка сервера при отриманні потоків команди",
+      message: error.message || "Внутрішня помилка сервера",
       error: process.env.NODE_ENV === "development" ? error.message : undefined,
     });
   }
 };
 
 /**
- * Отримання загальної статистики компанії за місяць (P/L)
+ * ОНОВЛЕНО: Отримання загальної статистики компанії за місяць (P/L)
  * GET /api/flow-stats/company/monthly/:year/:month
  */
 const getCompanyMonthlyStats = async (req, res) => {
   try {
-    const month = parseInt(req.params.month);
     const year = parseInt(req.params.year);
+    const month = parseInt(req.params.month);
 
-    // Валідація параметрів
-    if (isNaN(month) || month < 1 || month > 12) {
+    if (isNaN(year) || isNaN(month)) {
       return res.status(400).json({
         success: false,
-        message: "Недійсний місяць. Має бути від 1 до 12",
+        message: "Недійсні параметри",
       });
     }
 
-    if (isNaN(year) || year < 2020 || year > 2030) {
-      return res.status(400).json({
-        success: false,
-        message: "Недійсний рік. Має бути від 2020 до 2030",
-      });
-    }
-
-    // Тільки адміни можуть переглядати загальну статистику компанії
-    const userRole = req.user.role;
-    if (userRole !== "admin") {
+    // Перевірка прав доступу: лише admin
+    if (req.user.role !== "admin") {
       return res.status(403).json({
         success: false,
-        message:
-          "Тільки адміністратори можуть переглядати загальну статистику компанії",
+        message: "Немає доступу до загальної статистики компанії",
       });
     }
 
-    const stats = await flowStatsModel.getCompanyMonthlyStats({ month, year });
+    const options = { month, year };
+    const stats = await flowStatsModel.getCompanyMonthlyStats(options);
 
     res.json({
       success: true,
@@ -622,30 +540,24 @@ const getCompanyMonthlyStats = async (req, res) => {
       },
     });
   } catch (error) {
-    console.error("Помилка отримання статистики компанії:", error);
-
-    if (error.message.includes("Місяць та рік є обов'язковими")) {
-      return res.status(400).json({
-        success: false,
-        message: error.message,
-      });
-    }
-
+    console.error("Помилка при отриманні статистики компанії:", error);
     res.status(500).json({
       success: false,
-      message: "Внутрішня помилка сервера при отриманні статистики компанії",
+      message: error.message || "Внутрішня помилка сервера",
       error: process.env.NODE_ENV === "development" ? error.message : undefined,
     });
   }
 };
 
 /**
- * Отримання агрегованої статистики
+ * ОНОВЛЕНО: Отримання агрегованої статистики за період з фільтрацією по користувачах
  * GET /api/flow-stats/:flow_id/aggregated
+ * Query params: month, year, dateFrom, dateTo, user_id
  */
 const getAggregatedStats = async (req, res) => {
   try {
     const flow_id = parseInt(req.params.flow_id);
+    const { month, year, dateFrom, dateTo, user_id } = req.query;
 
     if (isNaN(flow_id)) {
       return res.status(400).json({
@@ -657,8 +569,10 @@ const getAggregatedStats = async (req, res) => {
     // Перевірка доступу
     const hasAccess = await flowStatsModel.checkUserAccess(
       flow_id,
-      req.user.id
+      req.user.id,
+      req.user.role
     );
+
     if (!hasAccess) {
       return res.status(403).json({
         success: false,
@@ -667,20 +581,23 @@ const getAggregatedStats = async (req, res) => {
     }
 
     const options = {
-      month: req.query.month ? parseInt(req.query.month) : undefined,
-      year: req.query.year ? parseInt(req.query.year) : undefined,
-      dateFrom: req.query.dateFrom,
-      dateTo: req.query.dateTo,
+      month: month ? parseInt(month) : undefined,
+      year: year ? parseInt(year) : undefined,
+      dateFrom,
+      dateTo,
+      user_id: user_id ? parseInt(user_id) : undefined,
     };
 
-    const aggregatedStats = await flowStatsModel.getAggregatedStats(
+    const stats = await flowStatsModel.getAggregatedStats(
       flow_id,
-      options
+      options,
+      req.user.id,
+      req.user.role
     );
 
     res.json({
       success: true,
-      data: aggregatedStats,
+      data: stats,
     });
   } catch (error) {
     console.error("Помилка при отриманні агрегованої статистики:", error);
@@ -693,17 +610,24 @@ const getAggregatedStats = async (req, res) => {
 };
 
 /**
- * Видалення статистики за день
- * DELETE /api/flow-stats/:flow_id/:year/:month/:day
+ * ОНОВЛЕНО: Видалення статистики за конкретний день з урахуванням user_id
+ * DELETE /api/flow-stats/:flow_id/:user_id/:year/:month/:day
  */
 const deleteFlowStat = async (req, res) => {
   try {
     const flow_id = parseInt(req.params.flow_id);
+    const user_id = parseInt(req.params.user_id);
     const year = parseInt(req.params.year);
     const month = parseInt(req.params.month);
     const day = parseInt(req.params.day);
 
-    if (isNaN(flow_id) || isNaN(year) || isNaN(month) || isNaN(day)) {
+    if (
+      isNaN(flow_id) ||
+      isNaN(user_id) ||
+      isNaN(year) ||
+      isNaN(month) ||
+      isNaN(day)
+    ) {
       return res.status(400).json({
         success: false,
         message: "Недійсні параметри",
@@ -713,8 +637,10 @@ const deleteFlowStat = async (req, res) => {
     // Перевірка доступу
     const hasAccess = await flowStatsModel.checkUserAccess(
       flow_id,
-      req.user.id
+      req.user.id,
+      req.user.role
     );
+
     if (!hasAccess) {
       return res.status(403).json({
         success: false,
@@ -722,24 +648,33 @@ const deleteFlowStat = async (req, res) => {
       });
     }
 
-    const deleted = await flowStatsModel.deleteFlowStat(
+    // Додаткова перевірка: buyer може видаляти лише свою статистику
+    if (req.user.role === "buyer" && user_id !== req.user.id) {
+      return res.status(403).json({
+        success: false,
+        message: "Buyer може видаляти лише свою статистику",
+      });
+    }
+
+    const success = await flowStatsModel.deleteFlowStat(
       flow_id,
+      user_id,
       day,
       month,
       year
     );
 
-    if (deleted) {
-      res.json({
-        success: true,
-        message: "Статистика успішно видалена",
-      });
-    } else {
-      res.status(404).json({
+    if (!success) {
+      return res.status(404).json({
         success: false,
-        message: "Запис не знайдено",
+        message: "Запис статистики не знайдено",
       });
     }
+
+    res.json({
+      success: true,
+      message: "Статистика успішно видалена",
+    });
   } catch (error) {
     console.error("Помилка при видаленні статистики:", error);
     res.status(500).json({
@@ -751,14 +686,16 @@ const deleteFlowStat = async (req, res) => {
 };
 
 /**
- * Отримання статистики за місяць (для календарного представлення)
+ * ОНОВЛЕНО: Отримання календарної статистики за місяць з урахуванням user_id
  * GET /api/flow-stats/:flow_id/calendar/:year/:month
+ * Query params: user_id
  */
 const getMonthlyCalendarStats = async (req, res) => {
   try {
     const flow_id = parseInt(req.params.flow_id);
     const year = parseInt(req.params.year);
     const month = parseInt(req.params.month);
+    const { user_id } = req.query;
 
     if (isNaN(flow_id) || isNaN(year) || isNaN(month)) {
       return res.status(400).json({
@@ -770,8 +707,10 @@ const getMonthlyCalendarStats = async (req, res) => {
     // Перевірка доступу
     const hasAccess = await flowStatsModel.checkUserAccess(
       flow_id,
-      req.user.id
+      req.user.id,
+      req.user.role
     );
+
     if (!hasAccess) {
       return res.status(403).json({
         success: false,
@@ -779,7 +718,18 @@ const getMonthlyCalendarStats = async (req, res) => {
       });
     }
 
-    const stats = await flowStatsModel.getFlowStats(flow_id, { month, year });
+    const options = {
+      month,
+      year,
+      user_id: user_id ? parseInt(user_id) : undefined,
+    };
+
+    const stats = await flowStatsModel.getFlowStats(
+      flow_id,
+      options,
+      req.user.id,
+      req.user.role
+    );
 
     // Створюємо календарну структуру з порожніми днями
     const daysInMonth = new Date(year, month, 0).getDate();
@@ -791,26 +741,83 @@ const getMonthlyCalendarStats = async (req, res) => {
         day,
         month,
         year,
-        spend: 0,
-        installs: 0,
-        regs: 0,
-        deps: 0,
-        verified_deps: 0,
-        cpa: 0,
-        roi: 0,
-        inst2reg: 0,
-        reg2dep: 0,
-        notes: null,
+        users_stats: [],
+        aggregated: {
+          spend: 0,
+          installs: 0,
+          regs: 0,
+          deps: 0,
+          verified_deps: 0,
+          deposit_amount: 0,
+          redep_count: 0,
+          unique_redep_count: 0,
+          roi: 0,
+          inst2reg: 0,
+          reg2dep: 0,
+        },
         hasData: false,
       };
     }
 
-    // Заповнюємо данимі з бази
+    // Групуємо статистику по днях та користувачах
     stats.forEach((stat) => {
-      calendar[stat.day] = {
-        ...stat,
-        hasData: true,
-      };
+      const day = stat.day;
+      if (calendar[day]) {
+        calendar[day].users_stats.push({
+          user_id: stat.user_id,
+          username: stat.username,
+          user_full_name: stat.user_full_name,
+          spend: parseFloat(stat.spend) || 0,
+          installs: parseInt(stat.installs) || 0,
+          regs: parseInt(stat.regs) || 0,
+          deps: parseInt(stat.deps) || 0,
+          verified_deps: parseInt(stat.verified_deps) || 0,
+          deposit_amount: parseFloat(stat.deposit_amount) || 0,
+          redep_count: parseInt(stat.redep_count) || 0,
+          unique_redep_count: parseInt(stat.unique_redep_count) || 0,
+          cpa: parseFloat(stat.cpa) || 0,
+          roi: parseFloat(stat.roi) || 0,
+          inst2reg: parseFloat(stat.inst2reg) || 0,
+          reg2dep: parseFloat(stat.reg2dep) || 0,
+          notes: stat.notes,
+        });
+
+        // Оновлюємо агреговані дані для дня
+        calendar[day].aggregated.spend += parseFloat(stat.spend) || 0;
+        calendar[day].aggregated.installs += parseInt(stat.installs) || 0;
+        calendar[day].aggregated.regs += parseInt(stat.regs) || 0;
+        calendar[day].aggregated.deps += parseInt(stat.deps) || 0;
+        calendar[day].aggregated.verified_deps +=
+          parseInt(stat.verified_deps) || 0;
+        calendar[day].aggregated.deposit_amount +=
+          parseFloat(stat.deposit_amount) || 0;
+        calendar[day].aggregated.redep_count += parseInt(stat.redep_count) || 0;
+        calendar[day].aggregated.unique_redep_count +=
+          parseInt(stat.unique_redep_count) || 0;
+
+        calendar[day].hasData = true;
+      }
+    });
+
+    // Обчислюємо агреговані проценти для кожного дня
+    Object.values(calendar).forEach((dayData) => {
+      if (dayData.hasData) {
+        const agg = dayData.aggregated;
+        agg.inst2reg = agg.installs > 0 ? (agg.regs / agg.installs) * 100 : 0;
+        agg.reg2dep = agg.regs > 0 ? (agg.deps / agg.regs) * 100 : 0;
+
+        // ROI обчислюємо на основі середнього CPA користувачів
+        const totalRevenue = dayData.users_stats.reduce((sum, user) => {
+          return sum + user.deps * user.cpa;
+        }, 0);
+        agg.roi =
+          agg.spend > 0 ? ((totalRevenue - agg.spend) / agg.spend) * 100 : 0;
+
+        // Округлюємо
+        agg.roi = Math.round(agg.roi * 100) / 100;
+        agg.inst2reg = Math.round(agg.inst2reg * 100) / 100;
+        agg.reg2dep = Math.round(agg.reg2dep * 100) / 100;
+      }
     });
 
     res.json({
@@ -819,7 +826,14 @@ const getMonthlyCalendarStats = async (req, res) => {
         flow_id,
         year,
         month,
+        filters: options,
         calendar: Object.values(calendar),
+        summary: {
+          total_days: daysInMonth,
+          days_with_data: Object.values(calendar).filter((d) => d.hasData)
+            .length,
+          unique_users: [...new Set(stats.map((s) => s.user_id))].length,
+        },
       },
     });
   } catch (error) {
@@ -832,16 +846,18 @@ const getMonthlyCalendarStats = async (req, res) => {
   }
 };
 
+// Експорт всіх методів контролера
 module.exports = {
+  // Основні методи
   upsertFlowStat,
+  getDailyFlowsStats,
   getFlowStats,
   getUserMonthlyStats,
   getTeamMonthlyStats,
-  getAggregatedStats,
-  deleteFlowStat,
-  getMonthlyCalendarStats,
-  getDailyFlowsStats,
   getUserFlowsMonthlyStats,
   getTeamFlowsMonthlyStats,
   getCompanyMonthlyStats,
+  getAggregatedStats,
+  deleteFlowStat,
+  getMonthlyCalendarStats,
 };
