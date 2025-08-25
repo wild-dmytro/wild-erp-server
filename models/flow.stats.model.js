@@ -1123,7 +1123,9 @@ const getUserMonthlyStats = async (
             parseFloat(row.total_spend) > 0
               ? Math.round(
                   (dayProfit / parseFloat(row.total_spend)) * 100 * 100
-                ) / 100
+                ) /
+                  100 -
+                100
               : 0,
           inst2reg: parseFloat(row.inst2reg) || 0,
           reg2dep: parseFloat(row.reg2dep) || 0,
@@ -1174,7 +1176,9 @@ const getUserMonthlyStats = async (
         totalMetrics.spend > 0
           ? Math.round(
               (totalMetrics.total_profit / totalMetrics.spend) * 100 * 100
-            ) / 100
+            ) /
+              100 -
+            100
           : 0,
       inst2reg:
         totalMetrics.installs > 0
@@ -1615,7 +1619,9 @@ const getTeamMonthlyStats = async (
             parseFloat(row.total_spend) > 0
               ? Math.round(
                   (dayProfit / parseFloat(row.total_spend)) * 100 * 100
-                ) / 100
+                ) /
+                  100 -
+                100
               : 0,
           inst2reg: parseFloat(row.inst2reg) || 0,
           reg2dep: parseFloat(row.reg2dep) || 0,
@@ -1701,7 +1707,9 @@ const getTeamMonthlyStats = async (
               parseFloat(user.total_spend) > 0
                 ? Math.round(
                     (userProfit / parseFloat(user.total_spend)) * 100 * 100
-                  ) / 100
+                  ) /
+                    100 -
+                  100
                 : 0,
             // ДОДАНО: Нові метрики
             oas: parseFloat(user.oas) || 0,
@@ -1748,7 +1756,9 @@ const getTeamMonthlyStats = async (
         totalMetrics.spend > 0
           ? Math.round(
               (totalMetrics.total_profit / totalMetrics.spend) * 100 * 100
-            ) / 100
+            ) /
+              100 -
+            100
           : 0,
       inst2reg:
         totalMetrics.installs > 0
@@ -2108,7 +2118,10 @@ const getUserFlowsMonthlyStats = async (
         avg_cpa: parseFloat(row.avg_cpa) || 0,
         days_with_stats: parseInt(row.days_with_stats) || 0,
         // Існуючі метрики
-        roi: parseFloat(row.roi) || 0,
+        roi:
+          row.total_spend > 0
+            ? Math.round((row.profit / row.total_spend) * 100 * 100) / 100 - 100
+            : 0,
         inst2reg: parseFloat(row.inst2reg) || 0,
         reg2dep: parseFloat(row.reg2dep) || 0,
         verification_rate: parseFloat(row.verification_rate) || 0,
@@ -2162,7 +2175,9 @@ const getUserFlowsMonthlyStats = async (
             totalMetrics.spend > 0
               ? Math.round(
                   (totalMetrics.total_profit / totalMetrics.spend) * 100 * 100
-                ) / 100
+                ) /
+                  100 -
+                100
               : 0,
           avg_inst2reg:
             totalMetrics.installs > 0
@@ -2516,7 +2531,9 @@ const getTeamFlowsMonthlyStats = async (
           parseFloat(row.total_spend) > 0
             ? Math.round(
                 (row.profit / parseFloat(row.total_spend)) * 100 * 100
-              ) / 100
+              ) /
+                100 -
+              100
             : 0,
         inst2reg: parseFloat(row.inst2reg) || 0,
         reg2dep: parseFloat(row.reg2dep) || 0,
@@ -2576,7 +2593,9 @@ const getTeamFlowsMonthlyStats = async (
             totalMetrics.spend > 0
               ? Math.round(
                   (totalMetrics.total_profit / totalMetrics.spend) * 100 * 100
-                ) / 100
+                ) /
+                  100 -
+                100
               : 0,
           avg_inst2reg:
             totalMetrics.installs > 0
@@ -2927,7 +2946,7 @@ const getCompanyMonthlyStats = async (options = {}) => {
             : 0,
         total_roi:
           totalSpend > 0
-            ? Math.round((totalProfit / totalSpend) * 100 * 100) / 100
+            ? Math.round((totalProfit / totalSpend) * 100 * 100) / 100 - 100
             : 0,
 
         // Операційні показники
@@ -3266,7 +3285,9 @@ const getAggregatedStats = async (
       parseFloat(stats.total_spend) > 0
         ? Math.round(
             (totalProfit / parseFloat(stats.total_spend)) * 100 * 100
-          ) / 100
+          ) /
+            100 -
+          100
         : 0;
 
     return {
