@@ -291,6 +291,7 @@ const getFlowStats = async (req, res) => {
 /**
  * ОНОВЛЕНО: Отримання статистики користувача за місяць по днях
  * GET /api/flow-stats/user/:userId/monthly/:year/:month
+ * ДОДАНО: підтримка нових метрик та розрахунку прибутку
  */
 const getUserMonthlyStats = async (req, res) => {
   try {
@@ -347,6 +348,7 @@ const getUserMonthlyStats = async (req, res) => {
 /**
  * ОНОВЛЕНО: Отримання статистики команди за місяць по днях
  * GET /api/flow-stats/team/:teamId/monthly/:year/:month
+ * ДОДАНО: підтримка нових метрик та розрахунку прибутку
  */
 const getTeamMonthlyStats = async (req, res) => {
   try {
@@ -384,6 +386,8 @@ const getTeamMonthlyStats = async (req, res) => {
         request_time: new Date().toISOString(),
         period: `${year}-${String(month).padStart(2, "0")}`,
         team_id: teamId,
+        total_profit: stats.summary.metrics.total_profit,
+        avg_daily_profit: stats.summary.avg_daily_profit,
       },
     });
   } catch (error) {
@@ -399,6 +403,7 @@ const getTeamMonthlyStats = async (req, res) => {
 /**
  * ОНОВЛЕНО: Отримання всіх потоків із агрегованою статистикою за місяць для користувача
  * GET /api/flow-stats/user/:userId/flows/monthly/:year/:month
+ * ДОДАНО: підтримка нових метрик та розрахунку прибутку
  */
 const getUserFlowsMonthlyStats = async (req, res) => {
   try {
@@ -437,6 +442,8 @@ const getUserFlowsMonthlyStats = async (req, res) => {
         period: `${year}-${String(month).padStart(2, "0")}`,
         user_id: userId,
         flows_count: stats.flows.length,
+        flows_with_activity: stats.summary.flows_with_activity,
+        total_profit: stats.summary.metrics.total_profit,
       },
     });
   } catch (error) {
@@ -452,6 +459,7 @@ const getUserFlowsMonthlyStats = async (req, res) => {
 /**
  * ОНОВЛЕНО: Отримання всіх потоків із агрегованою статистикою за місяць для команди
  * GET /api/flow-stats/team/:teamId/flows/monthly/:year/:month
+ * ДОДАНО: підтримка нових метрик та розрахунку прибутку
  */
 const getTeamFlowsMonthlyStats = async (req, res) => {
   try {
@@ -490,6 +498,8 @@ const getTeamFlowsMonthlyStats = async (req, res) => {
         period: `${year}-${String(month).padStart(2, "0")}`,
         team_id: teamId,
         flows_count: stats.flows.length,
+        flows_with_activity: stats.summary.flows_with_activity,
+        total_profit: stats.summary.metrics.total_profit,
       },
     });
   } catch (error) {
