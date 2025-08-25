@@ -146,7 +146,7 @@ const upsertFlowStat = async (data) => {
 };
 
 /**
- * ОНОВЛЕНО: Отримання денної статистики потоків з урахуванням користувачів
+ * ВИПРАВЛЕНО: Отримання денної статистики потоків з правильними параметрами
  */
 const getDailyFlowsStats = async (options) => {
   const {
@@ -165,168 +165,191 @@ const getDailyFlowsStats = async (options) => {
     offset = 0,
   } = options;
 
-  let conditions = [];
-  let params = [year, month, day];
+  // Створюємо параметри та умови послідовно
+  let queryParams = [day, month, year]; // $1, $2, $3
+  let countParams = [];
+  let whereConditions = [];
+  let countWhereConditions = [];
   let paramIndex = 3;
+  let countParamIndex = 0;
 
-  // Базові фільтри
+  // Додаємо фільтри один за одним
   if (partnerId) {
     paramIndex++;
-    conditions.push(`o.partner_id = $${paramIndex}`);
-    params.push(partnerId);
+    countParamIndex++;
+    whereConditions.push(`o.partner_id = $${paramIndex}`);
+    countWhereConditions.push(`o.partner_id = $${countParamIndex}`);
+    queryParams.push(partnerId);
+    countParams.push(partnerId);
   }
 
   if (partnerIds && partnerIds.length > 0) {
     paramIndex++;
-    conditions.push(`o.partner_id = ANY($${paramIndex})`);
-    params.push(partnerIds);
+    countParamIndex++;
+    whereConditions.push(`o.partner_id = ANY($${paramIndex})`);
+    countWhereConditions.push(`o.partner_id = ANY($${countParamIndex}`);
+    queryParams.push(partnerIds);
+    countParams.push(partnerIds);
   }
 
   if (status) {
     paramIndex++;
-    conditions.push(`f.status = $${paramIndex}`);
-    params.push(status);
+    countParamIndex++;
+    whereConditions.push(`f.status = $${paramIndex}`);
+    countWhereConditions.push(`f.status = $${countParamIndex}`);
+    queryParams.push(status);
+    countParams.push(status);
   }
 
   if (teamId) {
     paramIndex++;
-    conditions.push(`f.team_id = $${paramIndex}`);
-    params.push(teamId);
+    countParamIndex++;
+    whereConditions.push(`f.team_id = $${paramIndex}`);
+    countWhereConditions.push(`f.team_id = $${countParamIndex}`);
+    queryParams.push(teamId);
+    countParams.push(teamId);
   }
 
   if (userId) {
     paramIndex++;
-    conditions.push(`fu.user_id = $${paramIndex}`);
-    params.push(userId);
+    countParamIndex++;
+    whereConditions.push(`fu.user_id = $${paramIndex}`);
+    countWhereConditions.push(`fu.user_id = $${countParamIndex}`);
+    queryParams.push(userId);
+    countParams.push(userId);
   }
 
   if (onlyActive) {
-    conditions.push(`f.is_active = true`);
-    conditions.push(`fu.status = 'active'`);
+    whereConditions.push(`f.is_active = true`);
+    whereConditions.push(`fu.status = 'active'`);
+    countWhereConditions.push(`f.is_active = true`);
+    countWhereConditions.push(`fu.status = 'active'`);
   }
 
+  // Формуємо WHERE умови
   const whereClause =
-    conditions.length > 0 ? `AND ${conditions.join(" AND ")}` : "";
+    whereConditions.length > 0 ? ` AND ${whereConditions.join(" AND ")}` : "";
+  const countWhereClause =
+    countWhereConditions.length > 0
+      ? ` AND ${countWhereConditions.join(" AND ")}`
+      : "";
 
-  // ОНОВЛЕНО: основний запит з врахуванням user_id в статистиці
+  // Додаємо LIMIT та OFFSET до основного запиту
+  paramIndex++;
+  const limitParam = `$${paramIndex}`;
+  paramIndex++;
+  const offsetParam = `$${paramIndex}`;
+  queryParams.push(limit, offset);
+
+  // ОСНОВНИЙ ЗАПИТ
   const query = `
-    WITH flow_users_data AS (
-      SELECT DISTINCT 
-        f.id as flow_id,
-        f.name as flow_name,
-        f.status as flow_status,
-        f.cpa as flow_cpa,
-        f.currency as flow_currency,
-        f.description as flow_description,
-        f.flow_type,
-        f.kpi_metric,
+    SELECT DISTINCT 
+      f.id as flow_id,
+      f.name as flow_name,
+      f.status as flow_status,
+      f.cpa as flow_cpa,
+      f.currency as flow_currency,
+      f.description as flow_description,
+      f.flow_type,
+      f.kpi_metric,
+      
+      -- Дані партнера
+      p.id as partner_id,
+      p.name as partner_name,
+      p.type as partner_type,
+      p.is_active as partner_is_active,
+      p.contact_telegram as partner_telegram,
+      p.contact_email as partner_email,
+      
+      -- Дані офферу
+      o.id as offer_id,
+      o.name as offer_name,
+      o.description as offer_description,
+      
+      -- Дані команди
+      t.id as team_id_full,
+      t.name as team_name,
+      
+      -- Дані гео
+      g.id as geo_id,
+      g.name as geo_name,
+      g.country_code as geo_country_code,
+      
+      -- Дані користувачів потоку
+      fu.user_id,
+      u.username,
+      u.first_name,
+      u.last_name,
+      CONCAT(u.first_name, ' ', u.last_name) as user_full_name,
+      u.role as user_role,
+      
+      -- Статистика (може бути NULL)
+      fs.id as stats_id,
+      fs.spend,
+      fs.installs,
+      fs.regs,
+      fs.deps,
+      fs.verified_deps,
+      fs.cpa as stats_cpa,
+      fs.deposit_amount,
+      fs.redep_count,
+      fs.unique_redep_count,
+      fs.notes as stats_notes,
+      fs.created_at as stats_created_at,
+      fs.updated_at as stats_updated_at,
+      
+      -- Обчислювальні поля
+      CASE 
+        WHEN fs.id IS NOT NULL AND fs.spend > 0 AND fs.deps > 0 AND fs.cpa > 0
+        THEN ROUND(((fs.deps * fs.cpa - fs.spend) / fs.spend * 100)::numeric, 2)
+        ELSE NULL 
+      END as roi,
+      CASE 
+        WHEN fs.id IS NOT NULL AND fs.installs > 0 
+        THEN ROUND((fs.regs::numeric / fs.installs * 100)::numeric, 2)
+        ELSE NULL 
+      END as inst2reg,
+      CASE 
+        WHEN fs.id IS NOT NULL AND fs.regs > 0 
+        THEN ROUND((fs.deps::numeric / fs.regs * 100)::numeric, 2)
+        ELSE NULL 
+      END as reg2dep,
         
-        -- Дані партнера
-        p.id as partner_id,
-        p.name as partner_name,
-        p.type as partner_type,
-        p.is_active as partner_is_active,
-        p.contact_telegram as partner_telegram,
-        p.contact_email as partner_email,
+      CASE WHEN fs.id IS NOT NULL THEN true ELSE false END as has_stats
         
-        -- Дані офферу
-        o.id as offer_id,
-        o.name as offer_name,
-        o.description as offer_description,
-        
-        -- Дані команди
-        t.id as team_id_full,
-        t.name as team_name,
-        
-        -- Дані гео
-        g.id as geo_id,
-        g.name as geo_name,
-        g.country_code as geo_country_code,
-        
-        -- Дані користувачів потоку
-        fu.user_id,
-        u.username,
-        u.first_name,
-        u.last_name,
-        CONCAT(u.first_name, ' ', u.last_name) as user_full_name,
-        u.role as user_role
-        
-      FROM flows f
-      LEFT JOIN offers o ON f.offer_id = o.id
-      LEFT JOIN partners p ON o.partner_id = p.id
-      LEFT JOIN teams t ON f.team_id = t.id
-      LEFT JOIN geos g ON f.geo_id = g.id
-      LEFT JOIN flow_users fu ON f.id = fu.flow_id AND fu.status = 'active'
-      LEFT JOIN users u ON fu.user_id = u.id
-      WHERE 1=1 ${whereClause}
-    ),
-    
-    stats_data AS (
-      SELECT 
-        fud.*,
-        -- ОНОВЛЕНО: статистика за користувачем
-        fs.id as stats_id,
-        fs.user_id as stats_user_id,
-        fs.spend,
-        fs.installs,
-        fs.regs,
-        fs.deps,
-        fs.verified_deps,
-        fs.cpa as stats_cpa,
-        fs.deposit_amount,
-        fs.redep_count,
-        fs.unique_redep_count,
-        fs.notes as stats_notes,
-        fs.created_at as stats_created_at,
-        fs.updated_at as stats_updated_at,
-        
-        -- Обчислювальні поля
-        CASE 
-          WHEN fs.id IS NOT NULL AND fs.spend > 0 AND fs.deps > 0 AND fs.cpa > 0
-          THEN ROUND(((fs.deps * fs.cpa - fs.spend) / fs.spend * 100)::numeric, 2)
-          ELSE NULL 
-        END as roi,
-        CASE 
-          WHEN fs.id IS NOT NULL AND fs.installs > 0 
-          THEN ROUND((fs.regs::numeric / fs.installs * 100)::numeric, 2)
-          ELSE NULL 
-        END as inst2reg,
-        CASE 
-          WHEN fs.id IS NOT NULL AND fs.regs > 0 
-          THEN ROUND((fs.deps::numeric / fs.regs * 100)::numeric, 2)
-          ELSE NULL 
-        END as reg2dep
-        
-      FROM flow_users_data fud
-      LEFT JOIN flow_stats fs ON fud.flow_id = fs.flow_id 
-        AND fud.user_id = fs.user_id 
-        AND fs.day = $1 AND fs.month = $2 AND fs.year = $3
-    )
-    
-    SELECT 
-      sd.*,
-      CASE WHEN sd.stats_id IS NOT NULL THEN true ELSE false END as has_stats
-    FROM stats_data sd
-    ORDER BY sd.flow_name, sd.user_full_name
-    LIMIT $${paramIndex + 1} OFFSET $${paramIndex + 2}
+    FROM flows f
+    LEFT JOIN offers o ON f.offer_id = o.id
+    LEFT JOIN partners p ON o.partner_id = p.id
+    LEFT JOIN teams t ON f.team_id = t.id
+    LEFT JOIN geos g ON f.geo_id = g.id
+    LEFT JOIN flow_users fu ON f.id = fu.flow_id AND fu.status = 'active'
+    LEFT JOIN users u ON fu.user_id = u.id
+    LEFT JOIN flow_stats fs ON f.id = fs.flow_id 
+      AND fu.user_id = fs.user_id 
+      AND fs.day = $1 AND fs.month = $2 AND fs.year = $3
+    WHERE fu.user_id IS NOT NULL ${whereClause}
+    ORDER BY f.name, u.first_name, u.last_name
+    LIMIT ${limitParam} OFFSET ${offsetParam}
   `;
 
-  params.push(limit, offset);
-
-  // Запит для підрахунку загальної кількості
+  // COUNT ЗАПИТ
   const countQuery = `
     SELECT COUNT(DISTINCT CONCAT(f.id, '-', fu.user_id)) as total
     FROM flows f
     LEFT JOIN offers o ON f.offer_id = o.id
     LEFT JOIN partners p ON o.partner_id = p.id
     LEFT JOIN flow_users fu ON f.id = fu.flow_id AND fu.status = 'active'
-    WHERE 1=1 ${whereClause}
+    LEFT JOIN users u ON fu.user_id = u.id
+    WHERE fu.user_id IS NOT NULL ${countWhereClause}
   `;
 
   try {
+    console.log("Main query params:", queryParams);
+    console.log("Count query params:", countParams);
+
     const [flowsResult, countResult] = await Promise.all([
-      db.query(query, params.slice(0, -2).concat([limit, offset])),
-      db.query(countQuery, params.slice(0, params.length - 2)),
+      db.query(query, queryParams),
+      db.query(countQuery, countParams),
     ]);
 
     // Групуємо результати по потоках та користувачах
