@@ -104,13 +104,13 @@ const getUsersByPayoutRequestFlows = async (payoutRequestId) => {
   `;
 
   const result = await db.query(query, [payoutRequestId]);
-  
+
   // Групуємо результати по потоках
   const flowsMap = new Map();
-  
-  result.rows.forEach(row => {
+
+  result.rows.forEach((row) => {
     const flowId = row.flow_id;
-    
+
     if (!flowsMap.has(flowId)) {
       flowsMap.set(flowId, {
         id: row.flow_id,
@@ -123,12 +123,12 @@ const getUsersByPayoutRequestFlows = async (payoutRequestId) => {
         conversions: row.flow_conversions,
         offer_name: row.offer_name,
         geo_name: row.geo_name,
-        users: []
+        users: [],
       });
     }
-    
+
     const flow = flowsMap.get(flowId);
-    
+
     // Додаємо користувача до потоку
     flow.users.push({
       id: row.user_id,
@@ -139,19 +139,21 @@ const getUsersByPayoutRequestFlows = async (payoutRequestId) => {
       telegram_id: row.telegram_id,
       flow_status: row.user_flow_status,
       added_to_flow: row.user_added_to_flow,
-      allocation: row.has_allocation ? {
-        id: row.allocation_id,
-        allocated_amount: row.allocated_amount,
-        percentage: row.allocation_percentage,
-        status: row.allocation_status,
-        description: row.allocation_description,
-        notes: row.allocation_notes,
-        created_at: row.allocation_created_at
-      } : null,
-      has_allocation: row.has_allocation
+      allocation: row.has_allocation
+        ? {
+            id: row.allocation_id,
+            allocated_amount: row.allocated_amount,
+            percentage: row.allocation_percentage,
+            status: row.allocation_status,
+            description: row.allocation_description,
+            notes: row.allocation_notes,
+            created_at: row.allocation_created_at,
+          }
+        : null,
+      has_allocation: row.has_allocation,
     });
   });
-  
+
   return Array.from(flowsMap.values());
 };
 
@@ -167,10 +169,10 @@ const createAllocation = async (allocationData) => {
     flow_id,
     allocated_amount,
     percentage,
-    currency = 'USD',
+    currency = "USD",
     description,
     notes,
-    created_by
+    created_by,
   } = allocationData;
 
   const query = `
@@ -198,7 +200,7 @@ const createAllocation = async (allocationData) => {
     currency,
     description,
     notes,
-    created_by
+    created_by,
   ]);
 
   return result.rows[0];
@@ -218,7 +220,7 @@ const updateAllocation = async (allocationId, updateData) => {
     description,
     notes,
     status,
-    updated_by
+    updated_by,
   } = updateData;
 
   const query = `
@@ -244,7 +246,7 @@ const updateAllocation = async (allocationId, updateData) => {
     description,
     notes,
     status,
-    updated_by
+    updated_by,
   ]);
 
   return result.rows[0];
@@ -266,9 +268,61 @@ const deleteAllocation = async (allocationId) => {
   return result.rows.length > 0;
 };
 
+/**
+ * Отримання статистики розподілів для заявки
+ * @param {number} payoutRequestId - ID заявки на виплату
+ * @returns {Promise<Object>} Статистика розподілів
+ */
+const getAllocationStats = async (payoutRequestId) => {
+  const query = `
+    SELECT 
+      COUNT(*) as total_allocations,
+      COALESCE(SUM(allocated_amount), 0) as total_allocated,
+      COALESCE(AVG(allocated_amount), 0) as avg_allocation,
+      COUNT(DISTINCT user_id) as unique_users,
+      -- Порівняння з загальною сумою заявки
+      ppr.total_amount as payout_total,
+      CASE 
+        WHEN ppr.total_amount > 0 THEN 
+          ROUND((SUM(allocated_amount) / ppr.total_amount * 100), 2)
+        ELSE 0 
+      END as allocation_percentage,
+      -- Розподіл за статусами
+      COUNT(CASE WHEN pra.status = 'draft' THEN 1 END) as draft_count,
+      COUNT(CASE WHEN pra.status = 'confirmed' THEN 1 END) as confirmed_count,
+      COUNT(CASE WHEN pra.status = 'paid' THEN 1 END) as paid_count,
+      COUNT(CASE WHEN pra.status = 'cancelled' THEN 1 END) as cancelled_count
+    FROM 
+      payout_request_allocations pra
+    JOIN 
+      partner_payout_requests ppr ON pra.payout_request_id = ppr.id
+    WHERE 
+      pra.payout_request_id = $1
+    GROUP BY 
+      ppr.total_amount
+  `;
+
+  const result = await db.query(query, [payoutRequestId]);
+  return (
+    result.rows[0] || {
+      total_allocations: 0,
+      total_allocated: 0,
+      avg_allocation: 0,
+      unique_users: 0,
+      payout_total: 0,
+      allocation_percentage: 0,
+      draft_count: 0,
+      confirmed_count: 0,
+      paid_count: 0,
+      cancelled_count: 0,
+    }
+  );
+};
+
 module.exports = {
   getAllocationsByPayoutRequest,
   getUsersByPayoutRequestFlows,
+  getAllocationStats,
   createAllocation,
   updateAllocation,
   deleteAllocation,
