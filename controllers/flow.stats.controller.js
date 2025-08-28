@@ -513,6 +513,59 @@ const getTeamFlowsMonthlyStats = async (req, res) => {
 };
 
 /**
+ * ОНОВЛЕНО: Отримання всіх потоків із агрегованою статистикою за місяць для команди
+ * GET /api/flow-stats/team/:teamId/flows/monthly/:year/:month
+ * ДОДАНО: підтримка нових метрик та розрахунку прибутку
+ */
+const getCompanyFlowsMonthlyStats = async (req, res) => {
+  try {
+    const year = parseInt(req.params.year);
+    const month = parseInt(req.params.month);
+
+    if (isNaN(year) || isNaN(month)) {
+      return res.status(400).json({
+        success: false,
+        message: "Недійсні параметри",
+      });
+    }
+
+    // Перевірка прав доступу: лише admin/bizdev/teamlead
+    if (req.user.role === "buyer") {
+      return res.status(403).json({
+        success: false,
+        message: "Немає доступу до статистики команди",
+      });
+    }
+
+    const options = { month, year };
+    const stats = await flowStatsModel.getCompanyFlowsMonthlyStats(
+      options,
+      req.user.id,
+      req.user.role
+    );
+
+    res.json({
+      success: true,
+      data: stats,
+      meta: {
+        request_time: new Date().toISOString(),
+        period: `${year}-${String(month).padStart(2, "0")}`,
+        flows_count: stats.flows.length,
+        flows_with_activity: stats.summary.flows_with_activity,
+        total_profit: stats.summary.metrics.total_profit,
+      },
+    });
+  } catch (error) {
+    console.error("Помилка при отриманні потоків команди:", error);
+    res.status(500).json({
+      success: false,
+      message: error.message || "Внутрішня помилка сервера",
+      error: process.env.NODE_ENV === "development" ? error.message : undefined,
+    });
+  }
+};
+
+/**
  * ОНОВЛЕНО: Отримання загальної статистики компанії за місяць (P/L)
  * GET /api/flow-stats/company/monthly/:year/:month
  */
@@ -1001,6 +1054,143 @@ const getMonthlyCalendarStats = async (req, res) => {
   }
 };
 
+/**
+ * Отримання денної статистики компанії за місяць
+ * GET /api/company/daily-stats
+ * @param {Object} req - Об'єкт запиту Express
+ * @param {Object} res - Об'єкт відповіді Express
+ */
+const getCompanyDailyStats = async (req, res) => {
+  try {
+    const {
+      month,
+      year,
+      format = "detailed", // detailed | summary
+    } = req.query;
+
+    // Валідація параметрів
+    const errors = [];
+
+    if (
+      !month ||
+      isNaN(parseInt(month)) ||
+      parseInt(month) < 1 ||
+      parseInt(month) > 12
+    ) {
+      errors.push({
+        param: "month",
+        msg: "Місяць має бути числом від 1 до 12",
+      });
+    }
+
+    if (
+      !year ||
+      isNaN(parseInt(year)) ||
+      parseInt(year) < 2020 ||
+      parseInt(year) > 2030
+    ) {
+      errors.push({
+        param: "year",
+        msg: "Рік має бути числом від 2020 до 2030",
+      });
+    }
+
+    if (format && !["detailed", "summary"].includes(format)) {
+      errors.push({
+        param: "format",
+        msg: "Формат може бути 'detailed' або 'summary'",
+      });
+    }
+
+    if (errors.length > 0) {
+      return res.status(400).json({
+        success: false,
+        errors,
+      });
+    }
+
+    // Перевірка прав доступу
+    const userRole = req.user.role;
+    const requestingUserId = req.user.id;
+
+    // Тільки admin, bizdev та teamlead можуть переглядати статистику компанії
+    if (!["admin", "bizdev", "teamlead"].includes(userRole)) {
+      return res.status(403).json({
+        success: false,
+        message: "Недостатньо прав для перегляду статистики компанії",
+      });
+    }
+
+    // Для teamlead обмежуємо доступ тільки до своєї команди у функції getCompanyDailyStats
+    // (логіка фільтрації буде в самій функції моделі)
+
+    // Виклик функції моделі
+    const result = await flowStatsModel.getCompanyDailyStats(
+      {
+        month: parseInt(month),
+        year: parseInt(year),
+      },
+      requestingUserId,
+      userRole
+    );
+
+    // Формат відповіді залежно від параметра format
+    let responseData = result;
+
+    if (format === "summary") {
+      // Скорочений формат - тільки підсумок без денних деталей
+      responseData = {
+        company: result.company,
+        period: result.period,
+        summary: result.summary,
+        insights: result.insights,
+        meta: {
+          ...result.meta,
+          format: "summary",
+          daily_stats_count: result.daily_stats ? result.daily_stats.length : 0,
+        },
+      };
+    } else {
+      // Повний формат з додаванням мета інформації
+      responseData = {
+        ...result,
+        meta: {
+          ...result.meta,
+          format: "detailed",
+        },
+      };
+    }
+
+    res.json({
+      success: true,
+      data: responseData,
+    });
+  } catch (err) {
+    console.error("Помилка отримання денної статистики компанії:", err);
+
+    // Специфічні помилки
+    if (err.message.includes("Buyer не має доступу")) {
+      return res.status(403).json({
+        success: false,
+        message: "Доступ заборонено для ролі buyer",
+      });
+    }
+
+    if (err.message.includes("Місяць та рік є обов'язковими")) {
+      return res.status(400).json({
+        success: false,
+        message: "Некоректні параметри місяця або року",
+      });
+    }
+
+    res.status(500).json({
+      success: false,
+      message: "Помилка сервера під час отримання денної статистики компанії",
+      error: process.env.NODE_ENV === "development" ? err.message : undefined,
+    });
+  }
+};
+
 // Експорт всіх методів контролера
 module.exports = {
   // Основні методи
@@ -1011,8 +1201,10 @@ module.exports = {
   getTeamMonthlyStats,
   getUserFlowsMonthlyStats,
   getTeamFlowsMonthlyStats,
+  getCompanyFlowsMonthlyStats,
   getCompanyMonthlyStats,
   getAggregatedStats,
   deleteFlowStat,
   getMonthlyCalendarStats,
+  getCompanyDailyStats,
 };

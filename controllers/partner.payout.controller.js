@@ -1,9 +1,13 @@
 const partnerPayoutModel = require("../models/partner.payout.model");
+const partnerPaymentModel = require("../models/partner.payment.model");
+const payoutAllocationModel = require("../models/payout.allocation.model");
+
 const userModel = require("../models/user.model");
 const { validationResult } = require("express-validator");
 
 /**
  * Отримання списку всіх заявок на виплату з фільтрацією та пагінацією
+ * Включає дані про payments і allocations для кожної заявки
  * @param {Object} req - Об'єкт запиту Express
  * @param {Object} res - Об'єкт відповіді Express
  */
@@ -20,6 +24,7 @@ exports.getAllPayoutRequests = async (req, res) => {
       endDate,
       sortBy = "created_at",
       sortOrder = "desc",
+      includeDetails = "true", // новий параметр для включення додаткових даних
     } = req.query;
 
     // Перевірка коректності параметрів
@@ -97,11 +102,133 @@ exports.getAllPayoutRequests = async (req, res) => {
       sortOrder,
     });
 
-    res.json({
-      success: true,
-      data: result.data,
-      pagination: result.pagination,
-    });
+    // Якщо не потрібно включати додаткові дані, повертаємо як раніше
+    if (
+      includeDetails === "false" ||
+      !result.data ||
+      result.data.length === 0
+    ) {
+      return res.json({
+        success: true,
+        data: result.data,
+        pagination: result.pagination,
+      });
+    }
+
+    // Збираємо ID всіх заявок для batch-запитів
+    const payoutRequestIds = result.data.map((request) => request.id);
+
+    try {
+      // Паралельно отримуємо платежі та розподіли для всіх заявок
+      const paymentsPromises = payoutRequestIds.map((id) =>
+        partnerPaymentModel
+          .getPaymentsByPayoutRequest(id)
+          .then((payments) => ({ payoutRequestId: id, payments }))
+          .catch((err) => {
+            console.error(`Помилка отримання платежів для заявки ${id}:`, err);
+            return { payoutRequestId: id, payments: [] };
+          })
+      );
+
+      const allocationsPromises = payoutRequestIds.map((id) =>
+        Promise.all([
+          payoutAllocationModel.getAllocationsByPayoutRequest(id),
+          payoutAllocationModel.getAllocationStats(id),
+        ])
+          .then(([allocations, stats]) => ({
+            payoutRequestId: id,
+            allocations: allocations || [],
+            stats: stats || {},
+          }))
+          .catch((err) => {
+            console.error(
+              `Помилка отримання розподілів для заявки ${id}:`,
+              err
+            );
+            return {
+              payoutRequestId: id,
+              allocations: [],
+              stats: {},
+            };
+          })
+      );
+
+      // Очікуємо завершення всіх запитів
+      const [paymentsResults, allocationsResults] = await Promise.all([
+        Promise.all(paymentsPromises),
+        Promise.all(allocationsPromises),
+      ]);
+
+      // Створюємо мапи для швидкого доступу до даних
+      const paymentsMap = new Map();
+      const allocationsMap = new Map();
+
+      paymentsResults.forEach(({ payoutRequestId, payments }) => {
+        paymentsMap.set(payoutRequestId, payments);
+      });
+
+      allocationsResults.forEach(({ payoutRequestId, allocations, stats }) => {
+        allocationsMap.set(payoutRequestId, { allocations, stats });
+      });
+
+      // Об'єднуємо дані
+      const enrichedData = result.data.map((payoutRequest) => {
+        const payments = paymentsMap.get(payoutRequest.id) || [];
+        const allocationData = allocationsMap.get(payoutRequest.id) || {
+          allocations: [],
+          stats: {},
+        };
+
+        return {
+          ...payoutRequest,
+          payments: payments,
+          allocations: {
+            items: allocationData.allocations,
+            stats: allocationData.stats,
+          },
+          // Додаткові обчислені поля
+          summary: {
+            payments_count: payments.length,
+            payments_total: payments.reduce(
+              (sum, p) => sum + (parseFloat(p.amount) || 0),
+              0
+            ),
+            allocations_count: allocationData.allocations.length,
+            allocations_total: allocationData.stats.total_allocated || 0,
+            allocation_percentage:
+              allocationData.stats.allocation_percentage || 0,
+          },
+        };
+      });
+
+      res.json({
+        success: true,
+        data: enrichedData,
+        pagination: result.pagination,
+        meta: {
+          include_details: true,
+          total_payments: paymentsResults.reduce(
+            (sum, r) => sum + r.payments.length,
+            0
+          ),
+          total_allocations: allocationsResults.reduce(
+            (sum, r) => sum + r.allocations.length,
+            0
+          ),
+        },
+      });
+    } catch (detailsError) {
+      console.error("Помилка отримання додаткових даних:", detailsError);
+
+      // У випадку помилки повертаємо базові дані
+      res.json({
+        success: true,
+        data: result.data,
+        pagination: result.pagination,
+        warning:
+          "Не вдалося завантажити додаткові дані про платежі та розподіли",
+      });
+    }
   } catch (err) {
     console.error("Помилка отримання заявок на виплату:", err);
     res.status(500).json({
@@ -113,12 +240,14 @@ exports.getAllPayoutRequests = async (req, res) => {
 
 /**
  * Отримання детальної інформації про заявку за ID
+ * Включає дані про payments і allocations
  * @param {Object} req - Об'єкт запиту Express
  * @param {Object} res - Об'єкт відповіді Express
  */
 exports.getPayoutRequestById = async (req, res) => {
   try {
     const payoutRequestId = parseInt(req.params.id);
+    const { includeDetails = "true" } = req.query;
 
     if (isNaN(payoutRequestId)) {
       return res.status(400).json({
@@ -127,10 +256,44 @@ exports.getPayoutRequestById = async (req, res) => {
       });
     }
 
-    // Отримання заявки
-    const payoutRequest = await partnerPayoutModel.getPayoutRequestById(
-      payoutRequestId
-    );
+    // Паралельно отримуємо всі необхідні дані
+    const promises = [partnerPayoutModel.getPayoutRequestById(payoutRequestId)];
+
+    // Додаємо запити на платежі та розподіли, якщо потрібно
+    if (includeDetails === "true") {
+      promises.push(
+        partnerPaymentModel
+          .getPaymentsByPayoutRequest(payoutRequestId)
+          .catch((err) => {
+            console.error(
+              `Помилка отримання платежів для заявки ${payoutRequestId}:`,
+              err
+            );
+            return [];
+          }),
+        payoutAllocationModel
+          .getAllocationsByPayoutRequest(payoutRequestId)
+          .catch((err) => {
+            console.error(
+              `Помилка отримання розподілів для заявки ${payoutRequestId}:`,
+              err
+            );
+            return [];
+          }),
+        payoutAllocationModel
+          .getAllocationStats(payoutRequestId)
+          .catch((err) => {
+            console.error(
+              `Помилка отримання статистики розподілів для заявки ${payoutRequestId}:`,
+              err
+            );
+            return {};
+          })
+      );
+    }
+
+    const results = await Promise.all(promises);
+    const [payoutRequest, payments, allocations, allocationStats] = results;
 
     if (!payoutRequest) {
       return res.status(404).json({
@@ -139,9 +302,60 @@ exports.getPayoutRequestById = async (req, res) => {
       });
     }
 
+    // Базовий відгук
+    const responseData = {
+      ...payoutRequest,
+    };
+
+    // Додаємо деталі, якщо потрібно
+    if (includeDetails === "true") {
+      responseData.payments = payments || [];
+      responseData.allocations = {
+        items: allocations || [],
+        stats: allocationStats || {},
+      };
+
+      // Додаткові обчислені поля
+      responseData.summary = {
+        payments_count: (payments || []).length,
+        payments_total: (payments || []).reduce(
+          (sum, p) => sum + (parseFloat(p.amount) || 0),
+          0
+        ),
+        allocations_count: (allocations || []).length,
+        allocations_total:
+          (allocationStats && allocationStats.total_allocated) || 0,
+        allocation_percentage:
+          (allocationStats && allocationStats.allocation_percentage) || 0,
+        unique_users: (allocationStats && allocationStats.unique_users) || 0,
+      };
+
+      // Статус аналіз
+      const paymentsTotal = responseData.summary.payments_total;
+      const allocationsTotal = responseData.summary.allocations_total;
+      const payoutTotal = parseFloat(payoutRequest.total_amount) || 0;
+
+      responseData.analysis = {
+        is_fully_allocated: allocationsTotal >= payoutTotal,
+        is_fully_paid: paymentsTotal >= payoutTotal,
+        allocation_coverage:
+          payoutTotal > 0
+            ? Math.round((allocationsTotal / payoutTotal) * 100)
+            : 0,
+        payment_coverage:
+          payoutTotal > 0 ? Math.round((paymentsTotal / payoutTotal) * 100) : 0,
+        remaining_to_allocate: Math.max(0, payoutTotal - allocationsTotal),
+        remaining_to_pay: Math.max(0, payoutTotal - paymentsTotal),
+      };
+    }
+
     res.json({
       success: true,
-      data: payoutRequest,
+      data: responseData,
+      meta: {
+        include_details: includeDetails === "true",
+        loaded_at: new Date().toISOString(),
+      },
     });
   } catch (err) {
     console.error(`Помилка отримання заявки з ID ${req.params.id}:`, err);
@@ -149,6 +363,62 @@ exports.getPayoutRequestById = async (req, res) => {
       success: false,
       message: "Помилка сервера під час отримання заявки",
     });
+  }
+};
+
+/**
+ * Допоміжна функція для отримання повних даних однієї заявки
+ * Може використовуватися в інших частинах додатку
+ * @param {number} payoutRequestId - ID заявки на виплату
+ * @returns {Promise<Object>} Повні дані заявки з платежами та розподілами
+ */
+exports.getFullPayoutRequestData = async (payoutRequestId) => {
+  try {
+    const [payoutRequest, payments, allocations, allocationStats] =
+      await Promise.all([
+        partnerPayoutModel.getPayoutRequestById(payoutRequestId),
+        partnerPaymentModel
+          .getPaymentsByPayoutRequest(payoutRequestId)
+          .catch(() => []),
+        payoutAllocationModel
+          .getAllocationsByPayoutRequest(payoutRequestId)
+          .catch(() => []),
+        payoutAllocationModel
+          .getAllocationStats(payoutRequestId)
+          .catch(() => ({})),
+      ]);
+
+    if (!payoutRequest) {
+      return null;
+    }
+
+    return {
+      ...payoutRequest,
+      payments: payments || [],
+      allocations: {
+        items: allocations || [],
+        stats: allocationStats || {},
+      },
+      summary: {
+        payments_count: (payments || []).length,
+        payments_total: (payments || []).reduce(
+          (sum, p) => sum + (parseFloat(p.amount) || 0),
+          0
+        ),
+        allocations_count: (allocations || []).length,
+        allocations_total:
+          (allocationStats && allocationStats.total_allocated) || 0,
+        allocation_percentage:
+          (allocationStats && allocationStats.allocation_percentage) || 0,
+        unique_users: (allocationStats && allocationStats.unique_users) || 0,
+      },
+    };
+  } catch (error) {
+    console.error(
+      `Помилка отримання повних даних заявки ${payoutRequestId}:`,
+      error
+    );
+    throw error;
   }
 };
 

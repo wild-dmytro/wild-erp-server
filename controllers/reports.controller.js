@@ -1,4 +1,5 @@
 const requestModel = require("../models/request.model");
+const reportsModel = require("../models/reports.model");
 const { isValid } = require("date-fns");
 
 /**
@@ -322,6 +323,51 @@ exports.getDepartmentExpenseStats = async (req, res) => {
     res.status(500).json({
       success: false,
       message: "Помилка сервера під час отримання статистики відділів",
+    });
+  }
+};
+
+/**
+ * Отримання загальної статистики для біздевів
+ * @param {Object} req - Об'єкт запиту Express
+ * @param {Object} res - Об'єкт відповіді Express
+ */
+exports.getBizdevOverview = async (req, res) => {
+  try {
+    const { startDate, endDate } = req.query;
+
+    // Валідація дат
+    const errors = [];
+    if (startDate && isNaN(Date.parse(startDate))) {
+      errors.push({ param: "startDate", msg: "Невірний формат дати" });
+    }
+    if (endDate && isNaN(Date.parse(endDate))) {
+      errors.push({ param: "endDate", msg: "Невірний формат дати" });
+    }
+
+    if (errors.length > 0) {
+      return res.status(400).json({
+        success: false,
+        errors,
+      });
+    }
+
+    // Отримання даних через модель
+    const stats = await reportsModel.getBizdevStatistics({
+      startDate: startDate ? new Date(startDate) : undefined,
+      endDate: endDate ? new Date(endDate) : undefined,
+    });
+
+    res.json({
+      success: true,
+      data: stats,
+    });
+  } catch (err) {
+    console.error("Помилка отримання статистики для біздевів:", err);
+    res.status(500).json({
+      success: false,
+      message: "Помилка сервера під час отримання статистики для біздевів",
+      error: process.env.NODE_ENV === "development" ? err.message : undefined,
     });
   }
 };

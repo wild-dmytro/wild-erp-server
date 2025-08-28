@@ -197,6 +197,27 @@ router.get(
 );
 
 /**
+ * ОНОВЛЕНО: Отримання всіх потоків із агрегованою статистикою за місяць для команди
+ * GET /api/flow-stats/team/:teamId/flows/monthly/:year/:month
+ * @access Private/Admin/TeamLead/Bizdev
+ */
+router.get(
+  "/company/flows/monthly/:year/:month",
+  [
+    param("teamId", "ID команди має бути числом").isInt({ min: 1 }),
+    param("year", "Рік має бути числом між 2020 та 2030").isInt({
+      min: 2020,
+      max: 2030,
+    }),
+    param("month", "Місяць має бути числом між 1 та 12").isInt({
+      min: 1,
+      max: 12,
+    }),
+  ],
+  flowStatsController.getCompanyFlowsMonthlyStats
+);
+
+/**
  * ОНОВЛЕНО: Отримання загальної статистики компанії за місяць (P/L)
  * GET /api/flow-stats/company/monthly/:year/:month
  * @access Private/Admin
@@ -215,6 +236,36 @@ router.get(
   ],
   roleMiddleware("admin"),
   flowStatsController.getCompanyMonthlyStats
+);
+
+/**
+ * @route   GET /api/company/daily-stats
+ * @desc    Отримання денної статистики компанії за місяць
+ * @access  Admin, Bizdev, Teamlead
+ * @query   {number} month - Місяць (1-12)
+ * @query   {number} year - Рік
+ * @query   {string} [format=detailed] - Формат відповіді (detailed|summary)
+ *
+ * @example
+ * GET /api/company/daily-stats?month=1&year=2024&format=detailed
+ *
+ * Response:
+ * {
+ *   "success": true,
+ *   "data": {
+ *     "company": { "name": "Company" },
+ *     "period": { "month": 1, "year": 2024 },
+ *     "daily_stats": [...],
+ *     "summary": {...},
+ *     "breakdowns": {...},
+ *     "insights": {...}
+ *   }
+ * }
+ */
+router.get(
+  "/company/daily-stats",
+  roleMiddleware("admin", "bizdev"),
+  flowStatsController.getCompanyDailyStats
 );
 
 /**

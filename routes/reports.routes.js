@@ -1,8 +1,8 @@
-const express = require('express');
+const express = require("express");
 const router = express.Router();
-const reportsController = require('../controllers/reports.controller');
-const authMiddleware = require('../middleware/auth.middleware');
-const roleMiddleware = require('../middleware/role.middleware');
+const reportsController = require("../controllers/reports.controller");
+const authMiddleware = require("../middleware/auth.middleware");
+const roleMiddleware = require("../middleware/role.middleware");
 
 // Застосовуємо middleware авторизації до всіх маршрутів
 router.use(authMiddleware);
@@ -13,8 +13,8 @@ router.use(authMiddleware);
  * @access  Private/Admin/Finance
  */
 router.get(
-  '/stats/finance-managers',
-  roleMiddleware('admin', 'finance_manager'),
+  "/stats/finance-managers",
+  roleMiddleware("admin", "finance_manager"),
   reportsController.getFinanceManagerStats
 );
 
@@ -23,27 +23,44 @@ router.get(
  * @desc    Отримання сумарних витрат по місяцях
  * @access  Private
  */
-router.get('/summary/monthly-expenses', reportsController.getMonthlyExpenseSummary);
+router.get(
+  "/summary/monthly-expenses",
+  reportsController.getMonthlyExpenseSummary
+);
 
 /**
  * @route   GET /api/reports/statistics
  * @desc    Отримання агрегованих даних для статистичних карток
  * @access  Private
  */
-router.get('/statistics', reportsController.getStatistics);
+router.get("/statistics", reportsController.getStatistics);
 
 /**
  * @route   GET /api/reports/stats/request-type-summary
  * @desc    Отримання кількості та сум заявок по типах
  * @access  Private
  */
-router.get('/stats/request-type-summary', reportsController.getRequestTypeSummary);
+router.get(
+  "/stats/request-type-summary",
+  reportsController.getRequestTypeSummary
+);
 
 /**
  * @route   GET /api/reports/stats/departments
  * @desc    Отримання статистики витрат за відділами
  * @access  Private
  */
-router.get('/stats/departments', reportsController.getDepartmentExpenseStats);
+router.get("/stats/departments", reportsController.getDepartmentExpenseStats);
+
+/**
+ * @route   GET /api/reports/overview/bizdev
+ * @desc    Отримання загальної статистики для біздевів
+ * @access  Private/Admin/Bizdev
+ */
+router.get(
+  "/overview/bizdev",
+  roleMiddleware("admin", "bizdev"),
+  reportsController.getBizdevOverview
+);
 
 module.exports = router;
