@@ -8,18 +8,24 @@ const { validationResult } = require("express-validator");
  */
 exports.getAllDepartments = async (req, res) => {
   try {
-    const { onlyActive = false } = req.query;
+    const { onlyActive = false, isBuying } = req.query;
 
     // Перевірка параметра onlyActive
-    if (onlyActive && !['true', 'false'].includes(onlyActive)) {
+    if (onlyActive && !["true", "false"].includes(onlyActive)) {
       return res.status(400).json({
         success: false,
         message: "Параметр onlyActive має бути true або false",
       });
     }
 
+    // Перетворення string в boolean
+    const isBuyingFilter = isBuying === "true";
+
     // Отримання відділів
-    const departments = await departmentModel.getAllDepartments(onlyActive === 'true');
+    const departments = await departmentModel.getAllDepartments(
+      onlyActive === "true",
+      isBuyingFilter
+    );
 
     res.json({
       success: true,
@@ -101,7 +107,10 @@ exports.createDepartment = async (req, res) => {
     }
 
     // Створення відділу
-    const newDepartment = await departmentModel.createDepartment({ name, description });
+    const newDepartment = await departmentModel.createDepartment({
+      name,
+      description,
+    });
 
     res.status(201).json({
       success: true,
@@ -144,7 +153,9 @@ exports.updateDepartment = async (req, res) => {
     }
 
     // Перевіряємо наявність відділу
-    const existingDepartment = await departmentModel.getDepartmentById(departmentId);
+    const existingDepartment = await departmentModel.getDepartmentById(
+      departmentId
+    );
     if (!existingDepartment) {
       return res.status(404).json({
         success: false,
@@ -154,7 +165,9 @@ exports.updateDepartment = async (req, res) => {
 
     // Перевірка на унікальність нової назви, якщо вона змінюється
     if (name && name !== existingDepartment.name) {
-      const departmentWithName = await departmentModel.getDepartmentByName(name);
+      const departmentWithName = await departmentModel.getDepartmentByName(
+        name
+      );
       if (departmentWithName) {
         return res.status(400).json({
           success: false,
@@ -164,7 +177,10 @@ exports.updateDepartment = async (req, res) => {
     }
 
     // Оновлення відділу
-    const updatedDepartment = await departmentModel.updateDepartment(departmentId, { name, description });
+    const updatedDepartment = await departmentModel.updateDepartment(
+      departmentId,
+      { name, description }
+    );
 
     if (!updatedDepartment) {
       return res.status(400).json({
@@ -214,7 +230,9 @@ exports.updateDepartmentStatus = async (req, res) => {
     }
 
     // Перевіряємо наявність відділу
-    const existingDepartment = await departmentModel.getDepartmentById(departmentId);
+    const existingDepartment = await departmentModel.getDepartmentById(
+      departmentId
+    );
     if (!existingDepartment) {
       return res.status(404).json({
         success: false,
@@ -230,10 +248,13 @@ exports.updateDepartmentStatus = async (req, res) => {
     res.json({
       success: true,
       data: updatedDepartment,
-      message: `Відділ успішно ${is_active ? 'активовано' : 'деактивовано'}`,
+      message: `Відділ успішно ${is_active ? "активовано" : "деактивовано"}`,
     });
   } catch (err) {
-    console.error(`Помилка оновлення статусу відділу з ID ${req.params.id}:`, err);
+    console.error(
+      `Помилка оновлення статусу відділу з ID ${req.params.id}:`,
+      err
+    );
     res.status(500).json({
       success: false,
       message: "Помилка сервера під час оновлення статусу відділу",
@@ -258,7 +279,9 @@ exports.deleteDepartment = async (req, res) => {
     }
 
     // Перевіряємо наявність відділу
-    const existingDepartment = await departmentModel.getDepartmentById(departmentId);
+    const existingDepartment = await departmentModel.getDepartmentById(
+      departmentId
+    );
     if (!existingDepartment) {
       return res.status(404).json({
         success: false,

@@ -1,9 +1,9 @@
-const express = require('express');
+const express = require("express");
 const router = express.Router();
-const departmentsController = require('../controllers/departments.controller');
-const authMiddleware = require('../middleware/auth.middleware');
-const roleMiddleware = require('../middleware/role.middleware');
-const { check } = require('express-validator');
+const departmentsController = require("../controllers/departments.controller");
+const authMiddleware = require("../middleware/auth.middleware");
+const roleMiddleware = require("../middleware/role.middleware");
+const { check } = require("express-validator");
 
 // Застосовуємо middleware авторизації до всіх маршрутів
 router.use(authMiddleware);
@@ -14,8 +14,8 @@ router.use(authMiddleware);
  * @access  Private/Admin/TeamLead
  */
 router.get(
-  '/',
-  roleMiddleware('admin', 'teamlead'),
+  "/",
+  roleMiddleware("admin", "bizdev", "teamlead"),
   departmentsController.getAllDepartments
 );
 
@@ -25,8 +25,8 @@ router.get(
  * @access  Private/Admin/TeamLead
  */
 router.get(
-  '/:id',
-  roleMiddleware('admin', 'teamlead'),
+  "/:id",
+  roleMiddleware("admin", "teamlead"),
   departmentsController.getDepartmentById
 );
 
@@ -36,12 +36,12 @@ router.get(
  * @access  Private/Admin
  */
 router.post(
-  '/',
-  roleMiddleware('admin'),
+  "/",
+  roleMiddleware("admin"),
   [
-    check('name', 'Назва відділу є обов\'язковою').notEmpty(),
-    check('name', 'Назва відділу має бути рядком').isString(),
-    check('description', 'Опис має бути рядком').optional().isString()
+    check("name", "Назва відділу є обов'язковою").notEmpty(),
+    check("name", "Назва відділу має бути рядком").isString(),
+    check("description", "Опис має бути рядком").optional().isString(),
   ],
   departmentsController.createDepartment
 );
@@ -52,11 +52,11 @@ router.post(
  * @access  Private/Admin
  */
 router.put(
-  '/:id',
-  roleMiddleware('admin'),
+  "/:id",
+  roleMiddleware("admin"),
   [
-    check('name', 'Назва відділу має бути рядком').optional().isString(),
-    check('description', 'Опис має бути рядком').optional().isString()
+    check("name", "Назва відділу має бути рядком").optional().isString(),
+    check("description", "Опис має бути рядком").optional().isString(),
   ],
   departmentsController.updateDepartment
 );
@@ -67,11 +67,9 @@ router.put(
  * @access  Private/Admin
  */
 router.patch(
-  '/:id/status',
-  roleMiddleware('admin'),
-  [
-    check('is_active', 'Статус є обов\'язковим').isBoolean()
-  ],
+  "/:id/status",
+  roleMiddleware("admin"),
+  [check("is_active", "Статус є обов'язковим").isBoolean()],
   departmentsController.updateDepartmentStatus
 );
 
@@ -81,8 +79,8 @@ router.patch(
  * @access  Private/Admin
  */
 router.delete(
-  '/:id',
-  roleMiddleware('admin'),
+  "/:id",
+  roleMiddleware("admin"),
   departmentsController.deleteDepartment
 );
 

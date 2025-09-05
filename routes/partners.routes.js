@@ -1,9 +1,9 @@
-const express = require('express');
+const express = require("express");
 const router = express.Router();
-const partnersController = require('../controllers/partners.controller');
-const authMiddleware = require('../middleware/auth.middleware');
-const roleMiddleware = require('../middleware/role.middleware');
-const { check } = require('express-validator');
+const partnersController = require("../controllers/partners.controller");
+const authMiddleware = require("../middleware/auth.middleware");
+const roleMiddleware = require("../middleware/role.middleware");
+const { check } = require("express-validator");
 
 // Застосовуємо middleware авторизації до всіх маршрутів
 router.use(authMiddleware);
@@ -23,10 +23,10 @@ router.use(authMiddleware);
  * @query   {string} [trafficSources] - ID джерел трафіку через кому: "1,2,3" або одне число: "5"
  * @query   {string} [sortBy] - Поле сортування: 'id', 'name', 'type', 'created_at', 'updated_at'
  * @query   {string} [sortOrder] - Порядок сортування: 'asc', 'desc'
- * 
+ *
  * @example
  * GET /api/partners?brands=1,2&geos=3,4&trafficSources=5&type=Brand&onlyActive=true&page=1&limit=20
- * 
+ *
  * @returns {Object} response
  * @returns {boolean} response.success - Статус успіху
  * @returns {Array} response.data - Масив партнерів з пов'язаними даними
@@ -34,8 +34,8 @@ router.use(authMiddleware);
  * @returns {Object} response.appliedFilters - Застосовані фільтри
  */
 router.get(
-  '/',
-  roleMiddleware('admin', "teamlead", 'bizdev', 'buyer'),
+  "/",
+  roleMiddleware("admin", "teamlead", "bizdev", "buyer"),
   partnersController.getAllPartners
 );
 
@@ -45,8 +45,8 @@ router.get(
  * @access  Private/Admin/BizDev
  */
 router.get(
-  '/stats',
-  roleMiddleware('admin', 'bizdev'),
+  "/stats",
+  roleMiddleware("admin", "bizdev"),
   partnersController.getPartnersStats
 );
 
@@ -56,8 +56,8 @@ router.get(
  * @access  Private/Admin/BizDev
  */
 router.get(
-  '/:id',
-  roleMiddleware('admin', 'bizdev'),
+  "/:id",
+  roleMiddleware("admin", "bizdev"),
   partnersController.getPartnerById
 );
 
@@ -67,28 +67,51 @@ router.get(
  * @access  Private/Admin/BizDev
  */
 router.post(
-  '/',
-  roleMiddleware('admin', 'bizdev'),
+  "/",
+  roleMiddleware("admin", "bizdev"),
   [
-    check('name', 'Назва партнера є обов\'язковою').notEmpty(),
-    check('name', 'Назва партнера має бути рядком').isString(),
-    check('type', 'Тип партнера є обов\'язковим').notEmpty(),
-    check('type', 'Недійсний тип партнера').isIn(['Brand', 'PP', 'NET', 'DIRECT ADV']),
-    check('contact_telegram', 'Telegram контакт має бути рядком').optional().isString(),
-    check('contact_email', 'Email має бути валідним').optional(),
-    check('partner_link', 'Посилання партнера має бути рядком').optional().isString(),
-    check('has_integration', 'Наявність інтеграції має бути булевим значенням').optional().isBoolean(),
-    check('postback_type', 'Недійсний тип постбека').optional().isIn(['Real time', '15-20 minutes', '1 hours', 'none']),
-    check('telegram_chat_link', 'Посилання на Telegram чат має бути рядком').optional().isString(),
-    check('description', 'Опис має бути рядком').optional().isString(),
-    check('brands', 'Бренди мають бути масивом').optional().isArray(),
-    check('brands.*.id', 'ID бренда має бути числом').optional().isInt(),
-    check('geos', 'Гео мають бути масивом').optional().isArray(),
-    check('geos.*.id', 'ID гео має бути числом').optional().isInt(),
-    check('payment_methods', 'Способи оплати мають бути масивом').optional().isArray(),
-    check('payment_methods.*', 'ID способу оплати має бути числом').optional().isInt(),
-    check('traffic_sources', 'Джерела трафіку мають бути масивом').optional().isArray(),
-    check('traffic_sources.*', 'ID джерела трафіку має бути числом').optional().isInt()
+    check("name", "Назва партнера є обов'язковою").notEmpty(),
+    check("name", "Назва партнера має бути рядком").isString(),
+    check("type", "Тип партнера є обов'язковим").notEmpty(),
+    check("type", "Недійсний тип партнера").isIn([
+      "Brand",
+      "PP",
+      "NET",
+      "DIRECT ADV",
+    ]),
+    check("contact_telegram", "Telegram контакт має бути рядком")
+      .optional()
+      .isString(),
+    check("contact_email", "Email має бути валідним").optional(),
+    check("partner_link", "Посилання партнера має бути рядком")
+      .optional()
+      .isString(),
+    check("has_integration", "Наявність інтеграції має бути булевим значенням")
+      .optional()
+      .isBoolean(),
+    check("postback_type", "Недійсний тип постбека")
+      .optional()
+      .isIn(["Real time", "15-20 minutes", "1 hours", "none"]),
+    check("telegram_chat_link", "Посилання на Telegram чат має бути рядком")
+      .optional()
+      .isString(),
+    check("description", "Опис має бути рядком").optional().isString(),
+    check("brands", "Бренди мають бути масивом").optional().isArray(),
+    check("brands.*.id", "ID бренда має бути числом").optional().isInt(),
+    check("geos", "Гео мають бути масивом").optional().isArray(),
+    check("geos.*.id", "ID гео має бути числом").optional().isInt(),
+    check("payment_methods", "Способи оплати мають бути масивом")
+      .optional()
+      .isArray(),
+    check("payment_methods.*.id", "ID способу оплати має бути числом")
+      .optional()
+      .isInt(),
+    check("traffic_sources", "Джерела трафіку мають бути масивом")
+      .optional()
+      .isArray(),
+    check("traffic_sources.*.id", "ID джерела трафіку має бути числом")
+      .optional()
+      .isInt(),
   ],
   partnersController.createPartner
 );
@@ -99,26 +122,46 @@ router.post(
  * @access  Private/Admin/BizDev
  */
 router.put(
-  '/:id',
-  roleMiddleware('admin', 'bizdev'),
+  "/:id",
+  roleMiddleware("admin", "bizdev"),
   [
-    check('name', 'Назва партнера має бути рядком').optional().isString(),
-    check('type', 'Недійсний тип партнера').optional().isIn(['Brand', 'PP', 'NET', 'DIRECT ADV']),
-    check('contact_telegram', 'Telegram контакт має бути рядком').optional().isString(),
-    check('contact_email', 'Email має бути валідним').optional().isEmail(),
-    check('partner_link', 'Посилання партнера має бути рядком').optional().isString(),
-    check('has_integration', 'Наявність інтеграції має бути булевим значенням').optional().isBoolean(),
-    check('postback_type', 'Недійсний тип постбека').optional().isIn(['Real time', '15-20 minutes', '1 hours', 'none']),
-    check('telegram_chat_link', 'Посилання на Telegram чат має бути рядком').optional().isString(),
-    check('description', 'Опис має бути рядком').optional().isString(),
-    check('brands', 'Бренди мають бути масивом').optional().isArray(),
-    check('brands.*', 'ID бренда має бути числом').optional().isInt(),
-    check('geos', 'Гео мають бути масивом').optional().isArray(),
-    check('geos.*', 'ID гео має бути числом').optional().isInt(),
-    check('payment_methods', 'Способи оплати мають бути масивом').optional().isArray(),
-    check('payment_methods.*', 'ID способу оплати має бути числом').optional().isInt(),
-    check('traffic_sources', 'Джерела трафіку мають бути масивом').optional().isArray(),
-    check('traffic_sources.*', 'ID джерела трафіку має бути числом').optional().isInt()
+    check("name", "Назва партнера має бути рядком").optional().isString(),
+    check("type", "Недійсний тип партнера")
+      .optional()
+      .isIn(["Brand", "PP", "NET", "DIRECT ADV"]),
+    check("contact_telegram", "Telegram контакт має бути рядком")
+      .optional()
+      .isString(),
+    check("contact_email", "Email має бути валідним").optional().isEmail(),
+    check("partner_link", "Посилання партнера має бути рядком")
+      .optional()
+      .isString(),
+    check("has_integration", "Наявність інтеграції має бути булевим значенням")
+      .optional()
+      .isBoolean(),
+    check("postback_type", "Недійсний тип постбека")
+      .optional()
+      .isIn(["Real time", "15-20 minutes", "1 hours", "none"]),
+    check("telegram_chat_link", "Посилання на Telegram чат має бути рядком")
+      .optional()
+      .isString(),
+    check("description", "Опис має бути рядком").optional().isString(),
+    check("brands", "Бренди мають бути масивом").optional().isArray(),
+    check("brands.*", "ID бренда має бути числом").optional().isInt(),
+    check("geos", "Гео мають бути масивом").optional().isArray(),
+    check("geos.*", "ID гео має бути числом").optional().isInt(),
+    check("payment_methods", "Способи оплати мають бути масивом")
+      .optional()
+      .isArray(),
+    check("payment_methods.*", "ID способу оплати має бути числом")
+      .optional()
+      .isInt(),
+    check("traffic_sources", "Джерела трафіку мають бути масивом")
+      .optional()
+      .isArray(),
+    check("traffic_sources.*", "ID джерела трафіку має бути числом")
+      .optional()
+      .isInt(),
   ],
   partnersController.updatePartner
 );
@@ -129,11 +172,9 @@ router.put(
  * @access  Private/Admin/BizDev
  */
 router.patch(
-  '/:id/status',
-  roleMiddleware('admin', 'bizdev'),
-  [
-    check('is_active', 'Статус є обов\'язковим').isBoolean()
-  ],
+  "/:id/status",
+  roleMiddleware("admin", "bizdev"),
+  [check("is_active", "Статус є обов'язковим").isBoolean()],
   partnersController.updatePartnerStatus
 );
 
@@ -143,8 +184,8 @@ router.patch(
  * @access  Private/Admin
  */
 router.delete(
-  '/:id',
-  roleMiddleware('admin', 'bizdev'),
+  "/:id",
+  roleMiddleware("admin", "bizdev"),
   partnersController.deletePartner
 );
 
