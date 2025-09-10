@@ -8,14 +8,28 @@ const { validationResult } = require("express-validator");
  */
 exports.getAllTeams = async (req, res) => {
   try {
-    // Отримання параметра фільтру з query string
-    const { isBuying } = req.query;
-    
-    // Перетворення string в boolean
-    const isBuyingFilter = isBuying === 'true';
+    // Отримання параметрів фільтру з query string
+    const { isBuying, departmentId } = req.query;
 
-    // Отримання команд з фільтром
-    const teams = await teamModel.getAllTeams(isBuyingFilter);
+    // Перетворення string в boolean для isBuying
+    const isBuyingFilter = isBuying === "true";
+
+    // Перетворення departmentId в число, якщо воно передано
+    const departmentIdFilter = departmentId ? parseInt(departmentId) : null;
+
+    // Валідація departmentId
+    if (departmentId && isNaN(departmentIdFilter)) {
+      return res.status(400).json({
+        success: false,
+        message: "ID відділу має бути числом",
+      });
+    }
+
+    // Отримання команд з фільтрами
+    const teams = await teamModel.getAllTeams({
+      isBuying: isBuyingFilter,
+      departmentId: departmentIdFilter,
+    });
 
     res.json({
       success: true,
@@ -47,7 +61,7 @@ exports.getTeamById = async (req, res) => {
     }
 
     // Перевіряємо права доступу для тімліда
-    if (req.user.role === 'teamlead') {
+    if (req.user.role === "teamlead") {
       const currentUser = await teamModel.getTeamLead(teamId);
       if (!currentUser || currentUser.team_id !== teamId) {
         return res.status(403).json({
@@ -75,13 +89,15 @@ exports.getTeamById = async (req, res) => {
       success: true,
       data: {
         ...team,
-        teamLead: teamLead ? {
-          id: teamLead.id,
-          username: teamLead.username,
-          first_name: teamLead.first_name,
-          last_name: teamLead.last_name
-        } : null,
-        userCount
+        teamLead: teamLead
+          ? {
+              id: teamLead.id,
+              username: teamLead.username,
+              first_name: teamLead.first_name,
+              last_name: teamLead.last_name,
+            }
+          : null,
+        userCount,
       },
     });
   } catch (err) {

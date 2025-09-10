@@ -1,31 +1,63 @@
 const db = require("../config/db");
 
 /**
- * Отримує список всіх команд
- * @param {boolean} isBuying - Фільтр для медіабаїнгових команд
+ * Отримує список всіх команд з фільтрацією
+ * @param {Object} options - Об'єкт з параметрами фільтрації
+ * @param {boolean} options.isBuying - Фільтр для медіабаїнгових команд
+ * @param {number} options.departmentId - ID відділу для фільтрації
  * @returns {Promise<Array>} Масив команд
  */
-const getAllTeams = async (isBuying = null) => {
+const getAllTeams = async (options = {}) => {
+  // Підтримуємо як старий формат виклику (тільки з boolean), так і новий (з об'єктом)
+  let isBuying, departmentId;
+
+  if (typeof options === "boolean") {
+    // Старий формат виклику: getAllTeams(true/false)
+    isBuying = options;
+    departmentId = null;
+  } else {
+    // Новий формат виклику: getAllTeams({ isBuying: true, departmentId: 1 })
+    isBuying = options.isBuying;
+    departmentId = options.departmentId;
+  }
+
   let query = `
-    SELECT t.* 
+    SELECT t.*, d.name as department_name
     FROM teams t
   `;
-  
+
+  const conditions = [];
   const params = [];
-  
-  // Якщо потрібно фільтрувати по медіабаїнговим командам
-  if (isBuying === true) {
-    query += `
-    JOIN departments d ON t.department_id = d.id
-    WHERE d.type = $1
-    `;
-    params.push('buying');
+  let paramIndex = 1;
+  let needsJoin = false;
+
+  // Якщо потрібно фільтрувати по медіабаїнговим командам або по відділу, додаємо JOIN
+  if (isBuying === true || departmentId) {
+    query += ` LEFT JOIN departments d ON t.department_id = d.id`;
+    needsJoin = true;
+  } else {
+    query += ` LEFT JOIN departments d ON t.department_id = d.id`;
   }
-  
-  query += `
-    ORDER BY t.name
-  `;
-  
+
+  // Фільтр для медіабаїнгових команд
+  if (isBuying === true) {
+    conditions.push(`d.type = $${paramIndex++}`);
+    params.push("buying");
+  }
+
+  // Фільтр по ID відділу
+  if (departmentId) {
+    conditions.push(`t.department_id = $${paramIndex++}`);
+    params.push(departmentId);
+  }
+
+  // Додаємо WHERE clause якщо є умови
+  if (conditions.length > 0) {
+    query += ` WHERE ${conditions.join(" AND ")}`;
+  }
+
+  query += ` ORDER BY t.name`;
+
   const result = await db.query(query, params);
   return result.rows;
 };
@@ -44,7 +76,7 @@ const getTeamById = async (id) => {
     LEFT JOIN departments d ON t.department_id = d.id
     WHERE t.id = $1
   `;
-  
+
   const result = await db.query(query, [id]);
   return result.rows[0] || null;
 };
@@ -58,7 +90,7 @@ const getTeamByName = async (name) => {
   const query = `
     SELECT * FROM teams WHERE name = $1
   `;
-  
+
   const result = await db.query(query, [name]);
   return result.rows[0] || null;
 };
@@ -74,7 +106,7 @@ const createTeam = async (name) => {
     VALUES ($1)
     RETURNING *
   `;
-  
+
   const result = await db.query(query, [name]);
   return result.rows[0];
 };
@@ -92,7 +124,7 @@ const updateTeam = async (id, name) => {
     WHERE id = $2
     RETURNING *
   `;
-  
+
   const result = await db.query(query, [name, id]);
   return result.rows[0] || null;
 };
@@ -110,53 +142,57 @@ const deleteTeam = async (id) => {
       FROM users
       WHERE team_id = $1
     `;
-    
+
     const userCountResult = await db.query(userCountQuery, [id]);
     const userCount = parseInt(userCountResult.rows[0].user_count);
-    
+
     if (userCount > 0) {
       return {
         success: false,
-        message: "Неможливо видалити команду, оскільки до неї призначені користувачі"
+        message:
+          "Неможливо видалити команду, оскільки до неї призначені користувачі",
       };
     }
-    
+
     // Перевіряємо наявність запитів, пов'язаних з командою
     const requestCountQuery = `
       SELECT COUNT(*) as request_count
       FROM requests
       WHERE team_id = $1
     `;
-    
+
     const requestCountResult = await db.query(requestCountQuery, [id]);
     const requestCount = parseInt(requestCountResult.rows[0].request_count);
-    
+
     if (requestCount > 0) {
       return {
         success: false,
-        message: "Неможливо видалити команду, оскільки з нею пов'язані запити"
+        message: "Неможливо видалити команду, оскільки з нею пов'язані запити",
       };
     }
-    
+
     // Видаляємо команду
     const query = `
       DELETE FROM teams
       WHERE id = $1
       RETURNING id
     `;
-    
+
     const result = await db.query(query, [id]);
-    
+
     return {
       success: result.rows.length > 0,
-      message: result.rows.length > 0 ? "Команду успішно видалено" : "Команду не знайдено"
+      message:
+        result.rows.length > 0
+          ? "Команду успішно видалено"
+          : "Команду не знайдено",
     };
   } catch (error) {
     console.error("Error deleting team:", error);
     return {
       success: false,
       message: "Помилка при видаленні команди",
-      error: error.message
+      error: error.message,
     };
   }
 };
@@ -172,7 +208,7 @@ const getUserCountInTeam = async (teamId) => {
     FROM users
     WHERE team_id = $1
   `;
-  
+
   const result = await db.query(query, [teamId]);
   return parseInt(result.rows[0].user_count);
 };
@@ -189,7 +225,7 @@ const getTeamLead = async (teamId) => {
     WHERE team_id = $1 AND role = 'teamlead' AND is_active = true
     LIMIT 1
   `;
-  
+
   const result = await db.query(query, [teamId]);
   return result.rows[0] || null;
 };
@@ -202,5 +238,5 @@ module.exports = {
   updateTeam,
   deleteTeam,
   getUserCountInTeam,
-  getTeamLead
+  getTeamLead,
 };
