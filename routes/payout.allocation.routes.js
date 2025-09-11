@@ -37,6 +37,14 @@ const createAllocationValidation = [
     .withMessage("Нотатки не можуть перевищувати 1000 символів"),
 ];
 
+// GET /api/payout-allocations/user/:userId/period?period_start=2024-01-01&period_end=2024-12-31&status=completed&allocation_status=paid
+router.get(
+  "/user/:userId/period",
+  authMiddleware,
+  roleMiddleware("admin", "teamlead", "bizdev", "finance_manager"),
+  payoutAllocationController.getUserAllocationsByPeriod
+);
+
 // Отримання користувачів для розподілу коштів
 // GET /api/payout-allocations/:payoutRequestId/users
 router.get(

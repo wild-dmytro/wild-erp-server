@@ -23,7 +23,9 @@ exports.getUsersForAllocation = async (req, res) => {
     }
 
     // Перевіряємо чи існує заявка на виплату
-    const payoutRequest = await partnerPayoutModel.getPayoutRequestById(payoutRequestId);
+    const payoutRequest = await partnerPayoutModel.getPayoutRequestById(
+      payoutRequestId
+    );
     if (!payoutRequest) {
       return res.status(404).json({
         success: false,
@@ -32,7 +34,9 @@ exports.getUsersForAllocation = async (req, res) => {
     }
 
     // Отримуємо користувачів, які працюють з потоками цієї заявки
-    const flows = await payoutAllocationModel.getUsersByPayoutRequestFlows(payoutRequestId);
+    const flows = await payoutAllocationModel.getUsersByPayoutRequestFlows(
+      payoutRequestId
+    );
 
     res.json({
       success: true,
@@ -42,9 +46,9 @@ exports.getUsersForAllocation = async (req, res) => {
           total_amount: payoutRequest.total_amount,
           currency: payoutRequest.currency,
           status: payoutRequest.status,
-          partner_name: payoutRequest.partner_name
+          partner_name: payoutRequest.partner_name,
         },
-        flows: flows
+        flows: flows,
       },
     });
   } catch (err) {
@@ -75,14 +79,14 @@ exports.getAllocationsByPayoutRequest = async (req, res) => {
     // Отримуємо розподіли та статистику
     const [allocations, stats] = await Promise.all([
       payoutAllocationModel.getAllocationsByPayoutRequest(payoutRequestId),
-      payoutAllocationModel.getAllocationStats(payoutRequestId)
+      payoutAllocationModel.getAllocationStats(payoutRequestId),
     ]);
 
     res.json({
       success: true,
       data: {
         allocations: allocations,
-        stats: stats
+        stats: stats,
       },
     });
   } catch (err) {
@@ -90,6 +94,86 @@ exports.getAllocationsByPayoutRequest = async (req, res) => {
     res.status(500).json({
       success: false,
       message: "Помилка сервера під час отримання розподілів",
+    });
+  }
+};
+
+/**
+ * Отримання всіх алокацій користувача за період з деталями заявок на виплату
+ * @param {Object} req - Об'єкт запиту Express
+ * @param {Object} res - Об'єкт відповіді Express
+ */
+exports.getUserAllocationsByPeriod = async (req, res) => {
+  try {
+    // Валідація вхідних даних
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+      return res.status(400).json({
+        success: false,
+        errors: errors.array(),
+      });
+    }
+
+    const userId = parseInt(req.params.userId);
+    const { period_start, period_end, status, allocation_status } = req.query;
+
+    if (isNaN(userId)) {
+      return res.status(400).json({
+        success: false,
+        message: "ID користувача має бути числом",
+      });
+    }
+
+    // Перевірка коректності дат
+    const startDate = new Date(period_start);
+    const endDate = new Date(period_end);
+
+    if (startDate >= endDate) {
+      return res.status(400).json({
+        success: false,
+        message: "Дата початку періоду має бути раніше дати закінчення",
+      });
+    }
+
+    // Отримуємо алокації користувача за період з усіма деталями
+    const [allocations, summary] = await Promise.all([
+      payoutAllocationModel.getUserAllocationsByPeriod(userId, {
+        period_start,
+        period_end,
+        status,
+        allocation_status,
+      }),
+      payoutAllocationModel.getUserAllocationsStats(userId, {
+        period_start,
+        period_end,
+        status,
+        allocation_status,
+      }),
+    ]);
+
+    res.json({
+      success: true,
+      data: {
+        user_id: userId,
+        period: {
+          start: period_start,
+          end: period_end,
+        },
+        filters: {
+          payout_status: status || "всі",
+          allocation_status: allocation_status || "всі",
+        },
+        summary: summary,
+        allocations: allocations,
+      },
+      message: `Знайдено ${allocations.length} алокацій для користувача за період`,
+    });
+  } catch (err) {
+    console.error("Помилка отримання алокацій користувача за період:", err);
+    res.status(500).json({
+      success: false,
+      message:
+        "Помилка сервера під час отримання алокацій користувача за період",
     });
   }
 };
@@ -117,7 +201,7 @@ exports.createAllocation = async (req, res) => {
       allocated_amount,
       percentage,
       description,
-      notes
+      notes,
     } = req.body;
 
     if (isNaN(payoutRequestId)) {
@@ -128,7 +212,9 @@ exports.createAllocation = async (req, res) => {
     }
 
     // Перевіряємо чи існує заявка на виплату
-    const payoutRequest = await partnerPayoutModel.getPayoutRequestById(payoutRequestId);
+    const payoutRequest = await partnerPayoutModel.getPayoutRequestById(
+      payoutRequestId
+    );
     if (!payoutRequest) {
       return res.status(404).json({
         success: false,
@@ -145,9 +231,12 @@ exports.createAllocation = async (req, res) => {
     }
 
     // Перевіряємо чи загальна сума розподілів не перевищує суму заявки
-    const currentStats = await payoutAllocationModel.getAllocationStats(payoutRequestId);
-    const totalAfterAddition = parseFloat(currentStats.total_allocated) + parseFloat(allocated_amount);
-    
+    const currentStats = await payoutAllocationModel.getAllocationStats(
+      payoutRequestId
+    );
+    const totalAfterAddition =
+      parseFloat(currentStats.total_allocated) + parseFloat(allocated_amount);
+
     if (totalAfterAddition > parseFloat(payoutRequest.total_amount)) {
       return res.status(400).json({
         success: false,
@@ -164,10 +253,12 @@ exports.createAllocation = async (req, res) => {
       currency: payoutRequest.currency,
       description,
       notes,
-      created_by: req.user.id
+      created_by: req.user.id,
     };
 
-    const allocation = await payoutAllocationModel.createAllocation(allocationData);
+    const allocation = await payoutAllocationModel.createAllocation(
+      allocationData
+    );
 
     res.status(201).json({
       success: true,
@@ -176,9 +267,9 @@ exports.createAllocation = async (req, res) => {
     });
   } catch (err) {
     console.error("Помилка створення розподілу:", err);
-    
+
     // Обробка помилки унікальності
-    if (err.code === '23505') {
+    if (err.code === "23505") {
       return res.status(400).json({
         success: false,
         message: "Розподіл для цього користувача вже існує",
@@ -202,7 +293,7 @@ exports.updateAllocation = async (req, res) => {
     const allocationId = parseInt(req.params.allocationId);
     const updateData = {
       ...req.body,
-      updated_by: req.user.id
+      updated_by: req.user.id,
     };
 
     if (isNaN(allocationId)) {
@@ -213,14 +304,20 @@ exports.updateAllocation = async (req, res) => {
     }
 
     // Додаткова валідація сум, якщо оновлюється allocated_amount
-    if (updateData.allocated_amount !== undefined && updateData.allocated_amount <= 0) {
+    if (
+      updateData.allocated_amount !== undefined &&
+      updateData.allocated_amount <= 0
+    ) {
       return res.status(400).json({
         success: false,
         message: "Сума розподілу має бути більше 0",
       });
     }
 
-    const allocation = await payoutAllocationModel.updateAllocation(allocationId, updateData);
+    const allocation = await payoutAllocationModel.updateAllocation(
+      allocationId,
+      updateData
+    );
 
     if (!allocation) {
       return res.status(404).json({

@@ -158,6 +158,255 @@ const getUsersByPayoutRequestFlows = async (payoutRequestId) => {
 };
 
 /**
+ * НОВІ МЕТОДИ для models/payout.allocation.model.js
+ * Додати ці методи до існуючого файлу models/payout.allocation.model.js
+ */
+
+/**
+ * Отримання всіх алокацій користувача за період з деталями заявок на виплату
+ * @param {number} userId - ID користувача
+ * @param {Object} filters - Фільтри для пошуку
+ * @param {string} filters.period_start - Дата початку періоду (YYYY-MM-DD)
+ * @param {string} filters.period_end - Дата закінчення періоду (YYYY-MM-DD)
+ * @param {string} [filters.status] - Статус заявки на виплату
+ * @param {string} [filters.allocation_status] - Статус алокації
+ * @returns {Promise<Array>} Масив алокацій з деталями заявок
+ */
+const getUserAllocationsByPeriod = async (userId, filters) => {
+  const { period_start, period_end, status, allocation_status } = filters;
+
+  let query = `
+    SELECT 
+      -- Інформація про алокацію
+      pra.id as allocation_id,
+      pra.allocated_amount,
+      pra.percentage,
+      pra.currency as allocation_currency,
+      pra.description as allocation_description,
+      pra.notes as allocation_notes,
+      pra.status as allocation_status,
+      pra.created_at as allocation_created_at,
+      pra.updated_at as allocation_updated_at,
+      
+      -- Інформація про заявку на виплату
+      ppr.id as payout_request_id,
+      ppr.total_amount as payout_total_amount,
+      ppr.currency as payout_currency,
+      ppr.status as payout_status,
+      ppr.description as payout_description,
+      ppr.notes as payout_notes,
+      ppr.period_start,
+      ppr.period_end,
+      ppr.wallet_address,
+      ppr.network,
+      ppr.created_at as payout_created_at,
+      ppr.approved_at as payout_approved_at,
+      
+      -- Інформація про партнера
+      p.id as partner_id,
+      p.name as partner_name,
+      p.type as partner_type,
+      p.contact_telegram as partner_telegram,
+      p.contact_email as partner_email,
+      
+      -- Інформація про потік (якщо є)
+      f.id as flow_id,
+      f.name as flow_name,
+      f.status as flow_status,
+      f.cpa as flow_cpa,
+      f.currency as flow_currency,
+      
+      -- Інформація про офер (через потік)
+      o.id as offer_id,
+      o.name as offer_name,
+      
+      -- Інформація про гео (через потік)
+      g.id as geo_id,
+      g.name as geo_name,
+      
+      -- Інформація про команду
+      t.id as team_id,
+      t.name as team_name,
+      
+      -- Інформація про хто створив/схвалив
+      creator.username as created_by_username,
+      CONCAT(creator.first_name, ' ', creator.last_name) as created_by_name,
+      approver.username as approved_by_username,
+      CONCAT(approver.first_name, ' ', approver.last_name) as approved_by_name,
+      
+      -- Інформація про платежі (якщо є)
+      pp.id as payment_id,
+      pp.amount as payment_amount,
+      pp.transaction_hash,
+      pp.payment_date,
+      pp.status as payment_status
+      
+    FROM 
+      payout_request_allocations pra
+    JOIN 
+      partner_payout_requests ppr ON pra.payout_request_id = ppr.id
+    JOIN 
+      partners p ON ppr.partner_id = p.id
+    LEFT JOIN 
+      flows f ON pra.flow_id = f.id
+    LEFT JOIN 
+      offers o ON f.offer_id = o.id
+    LEFT JOIN 
+      geos g ON f.geo_id = g.id
+    LEFT JOIN 
+      teams t ON ppr.team_id = t.id
+    LEFT JOIN 
+      users creator ON ppr.created_by = creator.id
+    LEFT JOIN 
+      users approver ON ppr.approved_by = approver.id
+    LEFT JOIN 
+      partner_payments pp ON ppr.id = pp.payout_request_id
+    WHERE 
+      pra.user_id = $1
+      AND ppr.period_start >= $2
+      AND ppr.period_end <= $3
+  `;
+
+  const queryParams = [userId, period_start, period_end];
+  let paramIndex = 4;
+
+  // Додаємо фільтр по статусу заявки на виплату
+  if (status) {
+    query += ` AND ppr.status = $${paramIndex}`;
+    queryParams.push(status);
+    paramIndex++;
+  }
+
+  // Додаємо фільтр по статусу алокації
+  if (allocation_status) {
+    query += ` AND pra.status = $${paramIndex}`;
+    queryParams.push(allocation_status);
+    paramIndex++;
+  }
+
+  query += `
+    ORDER BY 
+      ppr.period_start DESC,
+      pra.created_at DESC
+  `;
+
+  const result = await db.query(query, queryParams);
+  return result.rows;
+};
+
+/**
+ * Отримання статистики алокацій користувача за період
+ * @param {number} userId - ID користувача
+ * @param {Object} filters - Фільтри для підрахунку статистики
+ * @returns {Promise<Object>} Об'єкт зі статистикою
+ */
+const getUserAllocationsStats = async (userId, filters) => {
+  const { period_start, period_end, status, allocation_status } = filters;
+
+  let query = `
+    SELECT 
+      COUNT(*) as total_allocations,
+      COUNT(DISTINCT ppr.id) as total_payout_requests,
+      COUNT(DISTINCT ppr.partner_id) as total_partners,
+      
+      -- Суми по алокаціях
+      COALESCE(SUM(pra.allocated_amount), 0) as total_allocated_amount,
+      COALESCE(AVG(pra.allocated_amount), 0) as avg_allocated_amount,
+      COALESCE(MIN(pra.allocated_amount), 0) as min_allocated_amount,
+      COALESCE(MAX(pra.allocated_amount), 0) as max_allocated_amount,
+      
+      -- Суми по заявках
+      COALESCE(SUM(DISTINCT ppr.total_amount), 0) as total_payout_amount,
+      COALESCE(AVG(DISTINCT ppr.total_amount), 0) as avg_payout_amount,
+      
+      -- Розподіл по статусах алокацій
+      COUNT(CASE WHEN pra.status = 'draft' THEN 1 END) as draft_allocations,
+      COUNT(CASE WHEN pra.status = 'confirmed' THEN 1 END) as confirmed_allocations,
+      COUNT(CASE WHEN pra.status = 'paid' THEN 1 END) as paid_allocations,
+      COUNT(CASE WHEN pra.status = 'cancelled' THEN 1 END) as cancelled_allocations,
+      
+      -- Розподіл по статусах заявок
+      COUNT(CASE WHEN ppr.status = 'draft' THEN 1 END) as draft_payouts,
+      COUNT(CASE WHEN ppr.status = 'pending' THEN 1 END) as pending_payouts,
+      COUNT(CASE WHEN ppr.status = 'approved' THEN 1 END) as approved_payouts,
+      COUNT(CASE WHEN ppr.status = 'in_payment' THEN 1 END) as in_payment_payouts,
+      COUNT(CASE WHEN ppr.status = 'completed' THEN 1 END) as completed_payouts,
+      COUNT(CASE WHEN ppr.status = 'rejected' THEN 1 END) as rejected_payouts,
+      COUNT(CASE WHEN ppr.status = 'cancelled' THEN 1 END) as cancelled_payouts,
+      
+      -- Розподіл по валютах
+      COUNT(CASE WHEN pra.currency = 'USD' THEN 1 END) as usd_allocations,
+      COUNT(CASE WHEN pra.currency = 'EUR' THEN 1 END) as eur_allocations,
+      COUNT(CASE WHEN pra.currency = 'GBP' THEN 1 END) as gbp_allocations,
+      
+      -- Дати
+      MIN(ppr.period_start) as earliest_period,
+      MAX(ppr.period_end) as latest_period,
+      MIN(pra.created_at) as first_allocation_date,
+      MAX(pra.created_at) as last_allocation_date
+      
+    FROM 
+      payout_request_allocations pra
+    JOIN 
+      partner_payout_requests ppr ON pra.payout_request_id = ppr.id
+    WHERE 
+      pra.user_id = $1
+      AND ppr.period_start >= $2
+      AND ppr.period_end <= $3
+  `;
+
+  const queryParams = [userId, period_start, period_end];
+  let paramIndex = 4;
+
+  // Додаємо фільтр по статусу заявки на виплату
+  if (status) {
+    query += ` AND ppr.status = $${paramIndex}`;
+    queryParams.push(status);
+    paramIndex++;
+  }
+
+  // Додаємо фільтр по статусу алокації
+  if (allocation_status) {
+    query += ` AND pra.status = $${paramIndex}`;
+    queryParams.push(allocation_status);
+    paramIndex++;
+  }
+
+  const result = await db.query(query, queryParams);
+  return (
+    result.rows[0] || {
+      total_allocations: 0,
+      total_payout_requests: 0,
+      total_partners: 0,
+      total_allocated_amount: 0,
+      avg_allocated_amount: 0,
+      min_allocated_amount: 0,
+      max_allocated_amount: 0,
+      total_payout_amount: 0,
+      avg_payout_amount: 0,
+      draft_allocations: 0,
+      confirmed_allocations: 0,
+      paid_allocations: 0,
+      cancelled_allocations: 0,
+      draft_payouts: 0,
+      pending_payouts: 0,
+      approved_payouts: 0,
+      in_payment_payouts: 0,
+      completed_payouts: 0,
+      rejected_payouts: 0,
+      cancelled_payouts: 0,
+      usd_allocations: 0,
+      eur_allocations: 0,
+      gbp_allocations: 0,
+      earliest_period: null,
+      latest_period: null,
+      first_allocation_date: null,
+      last_allocation_date: null,
+    }
+  );
+};
+
+/**
  * Створення розподілу коштів для користувача
  * @param {Object} allocationData - Дані розподілу
  * @returns {Promise<Object>} Створений розподіл
@@ -326,4 +575,6 @@ module.exports = {
   createAllocation,
   updateAllocation,
   deleteAllocation,
+  getUserAllocationsByPeriod,
+  getUserAllocationsStats,
 };
