@@ -177,6 +177,8 @@ const partnerPayoutModel = {
     const total = parseInt(countResult.rows[0].total);
     const totalPages = Math.ceil(total / limit);
 
+    console.log(payoutRequests);
+
     return {
       data: payoutRequests,
       pagination: {

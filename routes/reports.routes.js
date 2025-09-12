@@ -19,6 +19,80 @@ router.get(
 );
 
 /**
+ * @route   GET /api/reports/stats/user/:userId
+ * @desc    Отримання статистики для певного користувача
+ * @access  Private
+ */
+router.get(
+  "/stats/user/:userId",
+  roleMiddleware("admin", "teamlead", "buyer", "finance_manager"),
+  reportsController.getUserStats
+);
+
+/**
+ * @route   GET /api/reports/stats/team/:teamId
+ * @desc    Отримання статистики для команди
+ * @access  Private/Admin/Teamlead
+ */
+router.get(
+  "/stats/team/:teamId",
+  roleMiddleware("admin", "teamlead", "finance_manager"),
+  reportsController.getTeamStats
+);
+
+/**
+ * @route   GET /api/reports/monthly/user/:userId
+ * @desc    Отримання місячної статистики користувача за рік
+ * @access  Private
+ * @params  userId - ID користувача
+ * @query   year - рік для аналізу
+ */
+router.get(
+  "/monthly/user/:userId",
+  roleMiddleware("admin", "teamlead", "buyer", "finance_manager"),
+  reportsController.getUserMonthlyStatistics
+);
+
+/**
+ * @route   GET /api/reports/monthly/team/:teamId
+ * @desc    Отримання місячної статистики команди за рік
+ * @access  Private
+ * @params  teamId - ID команди
+ * @query   year - рік для аналізу
+ */
+router.get(
+  "/monthly/team/:teamId",
+  roleMiddleware("admin", "teamlead", "finance_manager"),
+  reportsController.getTeamMonthlyStatistics
+);
+
+/**
+ * @route   GET /api/reports/calendar/user/:userId
+ * @desc    Отримання календарної статистики користувача по витратах за місяць
+ * @access  Private
+ * @params  userId - ID користувача
+ * @query   month - місяць (1-12), year - рік
+ */
+router.get(
+  "/calendar/user/:userId",
+  roleMiddleware("admin", "teamlead", "buyer", "finance_manager"),
+  reportsController.getUserCalendarStats
+);
+
+/**
+ * @route   GET /api/reports/calendar/team/:teamId
+ * @desc    Отримання календарної статистики команди по витратах за місяць
+ * @access  Private
+ * @params  teamId - ID команди
+ * @query   month - місяць (1-12), year - рік
+ */
+router.get(
+  "/calendar/team/:teamId",
+  roleMiddleware("admin", "teamlead", "finance_manager"),
+  reportsController.getTeamCalendarStats
+);
+
+/**
  * @route   GET /api/reports/summary/monthly-expenses
  * @desc    Отримання сумарних витрат по місяцях
  * @access  Private

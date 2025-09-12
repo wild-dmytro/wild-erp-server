@@ -41,7 +41,7 @@ const createAllocationValidation = [
 router.get(
   "/user/:userId/period",
   authMiddleware,
-  roleMiddleware("admin", "teamlead", "bizdev", "finance_manager"),
+  roleMiddleware("admin", "teamlead", "bizdev", "buyer", "finance_manager"),
   payoutAllocationController.getUserAllocationsByPeriod
 );
 

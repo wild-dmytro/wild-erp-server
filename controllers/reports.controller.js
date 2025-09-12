@@ -371,3 +371,394 @@ exports.getBizdevOverview = async (req, res) => {
     });
   }
 };
+
+/**
+ * Отримання статистики для конкретного користувача
+ * @param {Object} req - Об'єкт запиту Express
+ * @param {Object} res - Об'єкт відповіді Express
+ */
+exports.getUserStats = async (req, res) => {
+  try {
+    const { userId } = req.params;
+    const { startDate, endDate } = req.query;
+
+    // Валідація параметрів
+    const errors = [];
+
+    if (!userId || isNaN(parseInt(userId))) {
+      errors.push({ param: "userId", msg: "ID користувача має бути числом" });
+    }
+
+    // Валідація дат
+    let parsedStartDate, parsedEndDate;
+    if (startDate || endDate) {
+      if (!startDate || !endDate) {
+        errors.push({
+          param: "date",
+          msg: "Потрібно вказати обидві дати (startDate і endDate)",
+        });
+      } else {
+        parsedStartDate = new Date(startDate);
+        parsedEndDate = new Date(endDate);
+        if (!isValid(parsedStartDate) || !isValid(parsedEndDate)) {
+          errors.push({ param: "date", msg: "Невірний формат дат" });
+        } else if (parsedStartDate > parsedEndDate) {
+          errors.push({
+            param: "date",
+            msg: "startDate не може бути пізніше за endDate",
+          });
+        }
+      }
+    }
+
+    if (errors.length > 0) {
+      return res.status(400).json({
+        success: false,
+        errors,
+      });
+    }
+
+    const stats = await reportsModel.getUserStatistics(parseInt(userId), {
+      startDate: parsedStartDate,
+      endDate: parsedEndDate,
+    });
+
+    res.json({
+      success: true,
+      data: stats,
+    });
+  } catch (err) {
+    console.error("Помилка отримання статистики користувача:", err);
+    res.status(500).json({
+      success: false,
+      message: "Помилка сервера під час отримання статистики користувача",
+      error: process.env.NODE_ENV === "development" ? err.message : undefined,
+    });
+  }
+};
+
+/**
+ * Отримання статистики для команди
+ * @param {Object} req - Об'єкт запиту Express
+ * @param {Object} res - Об'єкт відповіді Express
+ */
+exports.getTeamStats = async (req, res) => {
+  try {
+    const { teamId } = req.params;
+    const { startDate, endDate } = req.query;
+
+    // Валідація параметрів
+    const errors = [];
+
+    if (!teamId || isNaN(parseInt(teamId))) {
+      errors.push({ param: "teamId", msg: "ID команди має бути числом" });
+    }
+
+    // Валідація дат
+    let parsedStartDate, parsedEndDate;
+    if (startDate || endDate) {
+      if (!startDate || !endDate) {
+        errors.push({
+          param: "date",
+          msg: "Потрібно вказати обидві дати (startDate і endDate)",
+        });
+      } else {
+        parsedStartDate = new Date(startDate);
+        parsedEndDate = new Date(endDate);
+        if (!isValid(parsedStartDate) || !isValid(parsedEndDate)) {
+          errors.push({ param: "date", msg: "Невірний формат дат" });
+        } else if (parsedStartDate > parsedEndDate) {
+          errors.push({
+            param: "date",
+            msg: "startDate не може бути пізніше за endDate",
+          });
+        }
+      }
+    }
+
+    if (errors.length > 0) {
+      return res.status(400).json({
+        success: false,
+        errors,
+      });
+    }
+
+    const stats = await reportsModel.getTeamStatistics(parseInt(teamId), {
+      startDate: parsedStartDate,
+      endDate: parsedEndDate,
+    });
+
+    res.json({
+      success: true,
+      data: stats,
+    });
+  } catch (err) {
+    console.error("Помилка отримання статистики команди:", err);
+    res.status(500).json({
+      success: false,
+      message: "Помилка сервера під час отримання статистики команди",
+      error: process.env.NODE_ENV === "development" ? err.message : undefined,
+    });
+  }
+};
+
+/**
+ * Отримання календарної статистики користувача по витратах за місяць
+ * @param {Object} req - Об'єкт запиту Express
+ * @param {Object} res - Об'єкт відповіді Express
+ */
+exports.getUserCalendarStats = async (req, res) => {
+  try {
+    const { userId } = req.params;
+    const { month, year } = req.query;
+
+    // Валідація параметрів
+    const errors = [];
+
+    if (!userId || isNaN(parseInt(userId))) {
+      errors.push({ param: "userId", msg: "Невірний ID користувача" });
+    }
+
+    if (
+      !month ||
+      isNaN(parseInt(month)) ||
+      parseInt(month) < 1 ||
+      parseInt(month) > 12
+    ) {
+      errors.push({
+        param: "month",
+        msg: "Місяць має бути числом від 1 до 12",
+      });
+    }
+
+    if (!year || isNaN(parseInt(year)) || parseInt(year) < 2020) {
+      errors.push({ param: "year", msg: "Рік має бути числом не менше 2020" });
+    }
+
+    if (errors.length > 0) {
+      return res.status(400).json({
+        success: false,
+        errors,
+      });
+    }
+
+    const parsedUserId = parseInt(userId);
+    const parsedMonth = parseInt(month);
+    const parsedYear = parseInt(year);
+
+    // Отримання календарної статистики
+    const calendarData = await reportsModel.getUserCalendarStats({
+      userId: parsedUserId,
+      month: parsedMonth,
+      year: parsedYear,
+    });
+
+    res.json({
+      success: true,
+      data: {
+        userId: parsedUserId,
+        month: parsedMonth,
+        year: parsedYear,
+        calendar: calendarData,
+      },
+    });
+  } catch (err) {
+    console.error("Помилка отримання календарної статистики користувача:", err);
+    res.status(500).json({
+      success: false,
+      message: "Помилка сервера під час отримання календарної статистики",
+    });
+  }
+};
+
+/**
+ * Отримання календарної статистики команди по витратах за місяць
+ * @param {Object} req - Об'єкт запиту Express
+ * @param {Object} res - Об'єкт відповіді Express
+ */
+exports.getTeamCalendarStats = async (req, res) => {
+  try {
+    const { teamId } = req.params;
+    const { month, year } = req.query;
+
+    // Валідація параметрів
+    const errors = [];
+
+    if (!teamId || isNaN(parseInt(teamId))) {
+      errors.push({ param: "teamId", msg: "Невірний ID команди" });
+    }
+
+    if (
+      !month ||
+      isNaN(parseInt(month)) ||
+      parseInt(month) < 1 ||
+      parseInt(month) > 12
+    ) {
+      errors.push({
+        param: "month",
+        msg: "Місяць має бути числом від 1 до 12",
+      });
+    }
+
+    if (!year || isNaN(parseInt(year)) || parseInt(year) < 2020) {
+      errors.push({ param: "year", msg: "Рік має бути числом не менше 2020" });
+    }
+
+    if (errors.length > 0) {
+      return res.status(400).json({
+        success: false,
+        errors,
+      });
+    }
+
+    const parsedTeamId = parseInt(teamId);
+    const parsedMonth = parseInt(month);
+    const parsedYear = parseInt(year);
+
+    // Отримання календарної статистики команди
+    const calendarData = await reportsModel.getTeamCalendarStats({
+      teamId: parsedTeamId,
+      month: parsedMonth,
+      year: parsedYear,
+    });
+
+    res.json({
+      success: true,
+      data: {
+        teamId: parsedTeamId,
+        month: parsedMonth,
+        year: parsedYear,
+        calendar: calendarData,
+      },
+    });
+  } catch (err) {
+    console.error("Помилка отримання календарної статистики команди:", err);
+    res.status(500).json({
+      success: false,
+      message:
+        "Помилка сервера під час отримання календарної статистики команди",
+    });
+  }
+};
+
+/**
+ * Отримання місячної статистики користувача за рік
+ * @param {Object} req - Об'єкт запиту Express
+ * @param {Object} res - Об'єкт відповіді Express
+ */
+exports.getUserMonthlyStatistics = async (req, res) => {
+  try {
+    const { userId } = req.params;
+    const { year } = req.query;
+
+    // Валідація параметрів
+    const errors = [];
+
+    if (!userId || isNaN(parseInt(userId))) {
+      errors.push({ param: "userId", msg: "Невірний ID користувача" });
+    }
+
+    if (
+      !year ||
+      isNaN(parseInt(year)) ||
+      parseInt(year) < 2020 ||
+      parseInt(year) > new Date().getFullYear() + 1
+    ) {
+      errors.push({
+        param: "year",
+        msg: "Рік має бути числом від 2020 до поточного року + 1",
+      });
+    }
+
+    if (errors.length > 0) {
+      return res.status(400).json({
+        success: false,
+        errors,
+      });
+    }
+
+    const parsedUserId = parseInt(userId);
+    const parsedYear = parseInt(year);
+
+    // Отримання місячної статистики
+    const monthlyStats = await reportsModel.getUserMonthlyStatistics(
+      parsedUserId,
+      {
+        year: parsedYear,
+      }
+    );
+
+    res.json({
+      success: true,
+      data: monthlyStats,
+    });
+  } catch (err) {
+    console.error("Помилка отримання місячної статистики користувача:", err);
+    res.status(500).json({
+      success: false,
+      message: "Помилка сервера під час отримання місячної статистики",
+      error: process.env.NODE_ENV === "development" ? err.message : undefined,
+    });
+  }
+};
+
+/**
+ * Отримання місячної статистики команди за рік
+ * @param {Object} req - Об'єкт запиту Express
+ * @param {Object} res - Об'єкт відповіді Express
+ */
+exports.getTeamMonthlyStatistics = async (req, res) => {
+  try {
+    const { teamId } = req.params;
+    const { year } = req.query;
+
+    // Валідація параметрів
+    const errors = [];
+
+    if (!teamId || isNaN(parseInt(teamId))) {
+      errors.push({ param: "teamId", msg: "Невірний ID команди" });
+    }
+
+    if (
+      !year ||
+      isNaN(parseInt(year)) ||
+      parseInt(year) < 2020 ||
+      parseInt(year) > new Date().getFullYear() + 1
+    ) {
+      errors.push({
+        param: "year",
+        msg: "Рік має бути числом від 2020 до поточного року + 1",
+      });
+    }
+
+    if (errors.length > 0) {
+      return res.status(400).json({
+        success: false,
+        errors,
+      });
+    }
+
+    const parsedTeamId = parseInt(teamId);
+    const parsedYear = parseInt(year);
+
+    // Отримання місячної статистики команди
+    const monthlyStats = await reportsModel.getTeamMonthlyStatistics(
+      parsedTeamId,
+      {
+        year: parsedYear,
+      }
+    );
+
+    res.json({
+      success: true,
+      data: monthlyStats,
+    });
+  } catch (err) {
+    console.error("Помилка отримання місячної статистики команди:", err);
+    res.status(500).json({
+      success: false,
+      message: "Помилка сервера під час отримання місячної статистики команди",
+      error: process.env.NODE_ENV === "development" ? err.message : undefined,
+    });
+  }
+};
