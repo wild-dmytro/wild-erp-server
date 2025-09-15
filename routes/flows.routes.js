@@ -206,7 +206,7 @@ router.post(
     // Інші поля (без змін)
     check("status", "Недійсний статус потоку")
       .optional()
-      .isIn(["active", "paused", "stopped", "pending"]),
+      .isIn(["active", "paused", "stopped", "pending", "archived"]),
     check("cpa", "CPA має бути числом").optional().isFloat({ min: 0 }),
     check("currency", "Недійсна валюта")
       .optional()
@@ -257,7 +257,7 @@ router.put(
 
     check("status", "Недійсний статус потоку")
       .optional()
-      .isIn(["active", "paused", "stopped", "pending"]),
+      .isIn(["active", "paused", "stopped", "pending", "archived"]),
     check("cpa", "CPA має бути числом").optional().isFloat({ min: 0 }),
     check("currency", "Недійсна валюта")
       .optional()
@@ -301,6 +301,7 @@ router.patch(
       "paused",
       "stopped",
       "pending",
+      "archived",
     ]),
   ],
   flowController.updateFlowStatus
