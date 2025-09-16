@@ -180,7 +180,7 @@ const getAllUsers = async ({
       u.email,
       u.phone,
       u.sub_id,
-      u.description,
+      u.description
     FROM 
       users u
     LEFT JOIN 

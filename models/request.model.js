@@ -905,6 +905,7 @@ const getStatistics = async ({ startDate, endDate }) => {
  * @param {number} [options.page=1] - Номер сторінки
  * @param {number} [options.limit=10] - Кількість записів на сторінці
  * @param {string} [options.status] - Статус заявки для фільтрації
+ * @param {string} [options.type] - Тип заявки для фільтрації (refill, buying_expenses, operational_expenses)
  * @param {string} [options.requestType] - Тип заявки для фільтрації
  * @param {Date} [options.startDate] - Початкова дата для фільтрації
  * @param {Date} [options.endDate] - Кінцева дата для фільтрації
@@ -921,6 +922,7 @@ const getAllRequests = async ({
   page = 1,
   limit = 10,
   status,
+  type,
   requestType,
   startDate,
   endDate,
@@ -946,6 +948,25 @@ const getAllRequests = async ({
   if (status) {
     conditions.push(`r.status = $${paramIndex++}`);
     params.push(status);
+  }
+
+  console.log(type);
+
+  // Додано фільтр за type
+  if (type) {
+    if (type === "refill") {
+      conditions.push(`r.request_type = 'agent_refill'`);
+    } else if (type === "buying_expenses") {
+      conditions.push(
+        `r.request_type = 'expenses' AND d.type = $${paramIndex++}`
+      );
+      params.push("buying");
+    } else if (type === "operational_expenses") {
+      conditions.push(
+        `r.request_type = 'expenses' AND (d.type IS NULL OR d.type != $${paramIndex++})`
+      );
+      params.push("buying");
+    }
   }
 
   if (requestType) {
@@ -1128,6 +1149,7 @@ const getAllRequests = async ({
       td.name as team_name,
       d.id as department_id,
       d.name as department_name,
+      d.type as department_type,
       tl.id as teamlead_id,
       tl.username as teamlead_username,
       CONCAT(tl.first_name, ' ', tl.last_name) as teamlead_full_name,
@@ -1267,13 +1289,19 @@ const getAllRequests = async ({
           WHEN r.status IN ('rejected_by_finance', 'rejected_by_teamlead') AND r.request_type = 'expenses' THEN er.amount
           ELSE 0
         END
-      ) as rejected_amount
+      ) as rejected_amount,
+      -- Додаткові суми за типами (як у прикладі)
+      SUM(CASE WHEN r.request_type = 'agent_refill' THEN arr.amount ELSE 0 END) as total_refill_amount,
+      SUM(CASE WHEN r.request_type = 'expenses' AND d.type = 'buying' THEN er.amount ELSE 0 END) as total_buying_expenses,
+      SUM(CASE WHEN r.request_type = 'expenses' AND (d.type IS NULL OR d.type != 'buying') THEN er.amount ELSE 0 END) as total_operational_expenses
     FROM 
       requests r
     JOIN 
       users u ON r.user_id = u.id
     LEFT JOIN 
       teams t ON u.team_id = t.id
+    LEFT JOIN 
+      departments d ON r.department_id = d.id
     LEFT JOIN 
       users tl ON r.teamlead_id = tl.id
     LEFT JOIN 
@@ -1313,6 +1341,14 @@ const getAllRequests = async ({
   const completedAmount = parseFloat(countResult.rows[0].completed_amount) || 0;
   const rejectedAmount = parseFloat(countResult.rows[0].rejected_amount) || 0;
 
+  // Суми за типами
+  const totalRefillAmount =
+    parseFloat(countResult.rows[0].total_refill_amount) || 0;
+  const totalBuyingExpenses =
+    parseFloat(countResult.rows[0].total_buying_expenses) || 0;
+  const totalOperationalExpenses =
+    parseFloat(countResult.rows[0].total_operational_expenses) || 0;
+
   return {
     data: dataResult.rows,
     pagination: {
@@ -1345,6 +1381,18 @@ const getAllRequests = async ({
           byTeamlead: approvedByTeamleadCount,
           byFinance: approvedByFinanceCount,
           total: approvedByTeamleadCount + approvedByFinanceCount,
+        },
+        // Статистика за типами
+        byType: {
+          refill: {
+            amount: totalRefillAmount,
+          },
+          buyingExpenses: {
+            amount: totalBuyingExpenses,
+          },
+          operationalExpenses: {
+            amount: totalOperationalExpenses,
+          },
         },
       },
     },

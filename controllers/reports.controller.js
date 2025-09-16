@@ -1,6 +1,7 @@
 const requestModel = require("../models/request.model");
 const reportsModel = require("../models/reports.model");
 const { isValid } = require("date-fns");
+const { validationResult } = require("express-validator");
 
 /**
  * Отримання статистики заявок за фінансовими менеджерами
@@ -759,6 +760,195 @@ exports.getTeamMonthlyStatistics = async (req, res) => {
       success: false,
       message: "Помилка сервера під час отримання місячної статистики команди",
       error: process.env.NODE_ENV === "development" ? err.message : undefined,
+    });
+  }
+};
+
+/**
+ * Отримання загальної статистики компанії
+ * @route GET /api/statistics/company
+ */
+exports.getCompanyStats = async (req, res) => {
+  try {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+      return res.status(400).json({
+        success: false,
+        message: "Помилка валідації",
+        errors: errors.array(),
+      });
+    }
+
+    const { startDate, endDate } = req.query;
+
+    const options = {};
+    if (startDate) {
+      options.startDate = new Date(startDate);
+    }
+    if (endDate) {
+      options.endDate = new Date(endDate);
+    }
+
+    // Валідація дат
+    if (startDate && endDate && options.startDate > options.endDate) {
+      return res.status(400).json({
+        success: false,
+        message: "Початкова дата не може бути більшою за кінцеву",
+      });
+    }
+
+    const statistics = await reportsModel.getCompanyStatistics(options);
+
+    res.json({
+      success: true,
+      message: "Статистика компанії успішно отримана",
+      data: statistics,
+    });
+  } catch (error) {
+    console.error("Помилка отримання статистики компанії:", error);
+    res.status(500).json({
+      success: false,
+      message: "Внутрішня помилка сервера",
+      error: process.env.NODE_ENV === "development" ? error.message : undefined,
+    });
+  }
+};
+
+/**
+ * Отримання місячної статистики компанії за рік
+ * @route GET /api/statistics/company/monthly/:year
+ */
+exports.getCompanyMonthlyStats = async (req, res) => {
+  try {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+      return res.status(400).json({
+        success: false,
+        message: "Помилка валідації",
+        errors: errors.array(),
+      });
+    }
+
+    const year = parseInt(req.query.year);
+
+    // Валідація року
+    const currentYear = new Date().getFullYear();
+    if (year < 2020 || year > currentYear + 1) {
+      return res.status(400).json({
+        success: false,
+        message:
+          "Некоректний рік. Використовуйте рік від 2020 до поточного року",
+      });
+    }
+
+    const statistics = await reportsModel.getCompanyMonthlyStatistics({ year });
+
+    res.json({
+      success: true,
+      message: "Місячна статистика компанії успішно отримана",
+      data: statistics,
+    });
+  } catch (error) {
+    console.error("Помилка отримання місячної статистики компанії:", error);
+    res.status(500).json({
+      success: false,
+      message: "Внутрішня помилка сервера",
+      error: process.env.NODE_ENV === "development" ? error.message : undefined,
+    });
+  }
+};
+
+/**
+ * Отримання календарної статистики компанії за місяць
+ * @route GET /api/statistics/company/calendar/:year/:month
+ */
+exports.getCompanyCalendarStatistics = async (req, res) => {
+  try {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+      return res.status(400).json({
+        success: false,
+        message: "Помилка валідації",
+        errors: errors.array(),
+      });
+    }
+
+    const { month, year } = req.query;
+
+    if (
+      !month ||
+      isNaN(parseInt(month)) ||
+      parseInt(month) < 1 ||
+      parseInt(month) > 12
+    ) {
+      errors.push({
+        param: "month",
+        msg: "Місяць має бути числом від 1 до 12",
+      });
+    }
+
+    if (!year || isNaN(parseInt(year)) || parseInt(year) < 2020) {
+      errors.push({ param: "year", msg: "Рік має бути числом не менше 2020" });
+    }
+
+    // Валідація року
+    const currentYear = new Date().getFullYear();
+    if (parseInt(year) < 2020 || parseInt(year) > currentYear + 1) {
+      return res.status(400).json({
+        success: false,
+        message:
+          "Некоректний рік. Використовуйте рік від 2020 до поточного року",
+      });
+    }
+
+    // Валідація місяця
+    if (parseInt(month) < 1 || parseInt(month) > 12) {
+      return res.status(400).json({
+        success: false,
+        message: "Некоректний місяць. Використовуйте значення від 1 до 12",
+      });
+    }
+
+    const statistics = await reportsModel.getCompanyCalendarStats({
+      month: parseInt(month),
+      year: parseInt(year),
+    });
+
+    res.json({
+      success: true,
+      message: "Календарна статистика компанії успішно отримана",
+      data: {
+        year,
+        month,
+        daily_stats: statistics,
+        summary: {
+          total_days: statistics.length,
+          total_refills: statistics.reduce(
+            (sum, day) => sum + day.agent_refill_amount,
+            0
+          ),
+          total_expenses: statistics.reduce(
+            (sum, day) => sum + day.total_expenses,
+            0
+          ),
+          total_spend: statistics.reduce((sum, day) => sum + day.flow_spend, 0),
+          avg_daily_spend:
+            statistics.length > 0
+              ? Math.round(
+                  (statistics.reduce((sum, day) => sum + day.flow_spend, 0) /
+                    statistics.length) *
+                    100
+                ) / 100
+              : 0,
+        },
+      },
+    });
+  } catch (error) {
+    console.error("Помилка отримання календарної статистики компанії:", error);
+    res.status(500).json({
+      success: false,
+      message: "Внутрішня помилка сервера",
+      error: process.env.NODE_ENV === "development" ? error.message : undefined,
     });
   }
 };

@@ -137,4 +137,41 @@ router.get(
   reportsController.getBizdevOverview
 );
 
+/**
+ * @route   GET /api/reports/company
+ * @desc    Отримання загальної статистики компанії
+ * @access  Private/Admin/TeamLead/Finance
+ * @query   {string} [startDate] - Початкова дата у форматі ISO8601 (YYYY-MM-DD)
+ * @query   {string} [endDate] - Кінцева дата у форматі ISO8601 (YYYY-MM-DD)
+ */
+router.get(
+  "/stats/company",
+  roleMiddleware("admin", "finance_manager"),
+  reportsController.getCompanyStats
+);
+
+/**
+ * @route   GET /api/reports/company/monthly/:year
+ * @desc    Отримання місячної статистики компанії за рік
+ * @access  Private/Admin/TeamLead/Finance
+ * @param   {number} year - Рік для аналізу (2020-поточний рік)
+ */
+router.get(
+  "/monthly/company/",
+  roleMiddleware("admin", "finance_manager"),
+  reportsController.getCompanyMonthlyStats
+);
+
+/**
+ * @route   GET /api/reports/company/calendar/:year/:month
+ * @desc    Отримання календарної статистики компанії за місяць
+ * @access  Private/Admin/TeamLead/Finance
+ * @query   month - місяць (1-12), year - рік
+ */
+router.get(
+  "/calendar/company/",
+  roleMiddleware("admin", "finance_manager"),
+  reportsController.getCompanyCalendarStatistics
+);
+
 module.exports = router;
