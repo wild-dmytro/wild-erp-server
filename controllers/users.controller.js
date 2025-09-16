@@ -189,6 +189,9 @@ exports.createUser = async (req, res) => {
       table_id,
       email,
       position,
+      phone,
+      sub_id,
+      description,
     } = req.body;
 
     // Перевірка на існування користувача з таким Telegram ID
@@ -234,6 +237,9 @@ exports.createUser = async (req, res) => {
       table_id,
       email,
       position,
+      phone,
+      sub_id,
+      description,
     });
 
     res.status(201).json({
@@ -307,6 +313,9 @@ exports.updateUser = async (req, res) => {
         "is_active",
         "position",
         "email",
+        "phone",
+        "sub_id",
+        "description",
       ];
     } else if (currentUserRole === "teamlead") {
       // Тімлід може оновлювати користувачів зі своєї команди
@@ -340,11 +349,21 @@ exports.updateUser = async (req, res) => {
         "email",
         "position",
         "is_active",
+        "phone",
+        "sub_id",
+        "description",
       ];
     } else if (currentUserId === userId) {
       // Користувач може оновлювати тільки себе
       hasAccess = true;
-      allowedFields = ["first_name", "last_name", "table_id"];
+      allowedFields = [
+        "first_name",
+        "last_name",
+        "table_id",
+        "phone",
+        "sub_id",
+        "description",
+      ];
     }
 
     if (!hasAccess) {

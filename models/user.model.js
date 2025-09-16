@@ -177,7 +177,10 @@ const getAllUsers = async ({
       u.created_at,
       u.updated_at,
       u.position,
-      u.email
+      u.email,
+      u.phone,
+      u.sub_id,
+      u.description,
     FROM 
       users u
     LEFT JOIN 
@@ -290,6 +293,9 @@ const createUser = async ({
   table_id,
   email,
   position,
+  phone,
+  sub_id,
+  description,
 }) => {
   const query = `
     INSERT INTO users (
@@ -302,9 +308,12 @@ const createUser = async ({
       department_id,
       table_id,
       email,
-      position
+      positio,
+      phone,
+      sub_id,
+      description,
     )
-    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
     RETURNING *
   `;
 
@@ -319,6 +328,9 @@ const createUser = async ({
     table_id,
     email,
     position,
+    phone,
+    sub_id,
+    description,
   ];
 
   const result = await db.query(query, values);
@@ -344,6 +356,9 @@ const updateUser = async (id, userData) => {
     "is_active",
     "email",
     "position",
+    "phone",
+    "sub_id",
+    "description",
   ];
 
   // Фільтрація даних
