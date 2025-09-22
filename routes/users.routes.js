@@ -1,9 +1,9 @@
-const express = require('express');
+const express = require("express");
 const router = express.Router();
-const usersController = require('../controllers/users.controller');
-const authMiddleware = require('../middleware/auth.middleware');
-const roleMiddleware = require('../middleware/role.middleware');
-const { check } = require('express-validator');
+const usersController = require("../controllers/users.controller");
+const authMiddleware = require("../middleware/auth.middleware");
+const roleMiddleware = require("../middleware/role.middleware");
+const { check } = require("express-validator");
 
 // Застосовуємо middleware авторизації до всіх маршрутів
 router.use(authMiddleware);
@@ -14,8 +14,8 @@ router.use(authMiddleware);
  * @access  Private/Admin/TeamLead
  */
 router.get(
-  '/',
-  roleMiddleware('admin', 'teamlead', 'bizdev'),
+  "/",
+  roleMiddleware("admin", "teamlead", "bizdev"),
   usersController.getAllUsers
 );
 
@@ -25,7 +25,8 @@ router.get(
  * @access  Private/Admin/TeamLead/Self
  */
 router.get(
-  '/:id',
+  "/:id",
+  roleMiddleware("admin", "teamlead", "bizdev"),
   usersController.getUserById
 );
 
@@ -35,13 +36,18 @@ router.get(
  * @access  Private/Admin
  */
 router.post(
-  '/',
-  roleMiddleware('admin'),
+  "/",
+  roleMiddleware("admin"),
   [
-    check('telegram_id', 'Telegram ID є обов\'язковим').notEmpty(),
-    check('telegram_id', 'Telegram ID має бути числом').isNumeric(),
-    check('role', 'Роль користувача є обов\'язковою').notEmpty(),
-    check('role', 'Недійсна роль').isIn(['user', 'teamlead', 'finance_manager', 'admin'])
+    check("telegram_id", "Telegram ID є обов'язковим").notEmpty(),
+    check("telegram_id", "Telegram ID має бути числом").isNumeric(),
+    check("role", "Роль користувача є обов'язковою").notEmpty(),
+    check("role", "Недійсна роль").isIn([
+      "user",
+      "teamlead",
+      "finance_manager",
+      "admin",
+    ]),
   ],
   usersController.createUser
 );
@@ -51,21 +57,14 @@ router.post(
  * @desc    Оновлення даних користувача
  * @access  Private/Admin/Self
  */
-router.put(
-  '/:id',
-  usersController.updateUser
-);
+router.put("/:id", usersController.updateUser);
 
 /**
  * @route   DELETE /api/users/:id
  * @desc    Деактивація користувача (встановлення is_active = false)
  * @access  Private/Admin
  */
-router.delete(
-  '/:id',
-  roleMiddleware('admin'),
-  usersController.deactivateUser
-);
+router.delete("/:id", roleMiddleware("admin"), usersController.deactivateUser);
 
 /**
  * @route   POST /api/users/:id/activate
@@ -73,8 +72,8 @@ router.delete(
  * @access  Private/Admin
  */
 router.post(
-  '/:id/activate',
-  roleMiddleware('admin'),
+  "/:id/activate",
+  roleMiddleware("admin"),
   usersController.activateUser
 );
 
@@ -84,11 +83,16 @@ router.post(
  * @access  Private/Admin
  */
 router.put(
-  '/:id/role',
-  roleMiddleware('admin'),
+  "/:id/role",
+  roleMiddleware("admin"),
   [
-    check('role', 'Роль є обов\'язковою').notEmpty(),
-    check('role', 'Недійсна роль').isIn(['user', 'teamlead', 'finance_manager', 'admin'])
+    check("role", "Роль є обов'язковою").notEmpty(),
+    check("role", "Недійсна роль").isIn([
+      "user",
+      "teamlead",
+      "finance_manager",
+      "admin",
+    ]),
   ],
   usersController.updateUserRole
 );

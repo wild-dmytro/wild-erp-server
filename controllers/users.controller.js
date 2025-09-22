@@ -107,6 +107,7 @@ exports.getUserById = async (req, res) => {
     // Тільки адміни, тімліди та сам користувач можуть переглядати деталі
     if (
       currentUserRole !== "admin" &&
+      currentUserRole !== "bizdev" &&
       currentUserRole !== "teamlead" &&
       currentUserId !== userId
     ) {
