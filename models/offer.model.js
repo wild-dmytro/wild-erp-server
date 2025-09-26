@@ -78,7 +78,7 @@ const getAllOffers = async ({
 
     return {
       whereClause: conditions.join(" AND "),
-      params: params
+      params: params,
     };
   };
 
@@ -87,14 +87,14 @@ const getAllOffers = async ({
 
   // Валідація полів сортування - ВИПРАВЛЕНО: убрали префікс "o." для CTE
   const allowedSortFields = {
-    "id": "id",
-    "name": "name",
-    "created_at": "created_at",
-    "updated_at": "updated_at",
-    "geos_count": "geos_count",
-    "flows_count": "flows_count"
+    id: "id",
+    name: "name",
+    created_at: "created_at",
+    updated_at: "updated_at",
+    geos_count: "geos_count",
+    flows_count: "flows_count",
   };
-  
+
   const validSortBy = allowedSortFields[sortBy] || "created_at";
   const validSortOrder = sortOrder.toLowerCase() === "asc" ? "ASC" : "DESC";
 
@@ -175,11 +175,11 @@ const getAllOffers = async ({
   `;
 
   // Додаємо логування для відлагодження
-  if (process.env.NODE_ENV === 'development') {
-    console.log('WHERE Clause:', whereClause);
-    console.log('Query Params:', queryParams);
-    console.log('Base Params:', params);
-    console.log('Valid Sort By:', validSortBy);
+  if (process.env.NODE_ENV === "development") {
+    console.log("WHERE Clause:", whereClause);
+    console.log("Query Params:", queryParams);
+    console.log("Base Params:", params);
+    console.log("Valid Sort By:", validSortBy);
   }
 
   // Виконання всіх запитів паралельно
@@ -312,11 +312,7 @@ const getOfferById = async (id) => {
  * @returns {Promise<Object>} Створений оффер
  */
 const createOffer = async (offerData) => {
-  const client = await db.connect();
-  
   try {
-    await client.query('BEGIN');
-
     const {
       name,
       partner_id,
@@ -330,22 +326,21 @@ const createOffer = async (offerData) => {
     } = offerData;
 
     // Перевіряємо існування партнера
-    const partnerCheck = await client.query(
-      'SELECT id FROM partners WHERE id = $1',
+    const partnerCheck = await db.query(
+      "SELECT id FROM partners WHERE id = $1",
       [partner_id]
     );
     if (partnerCheck.rows.length === 0) {
-      throw new Error('Партнер з таким ID не існує');
+      throw new Error("Партнер з таким ID не існує");
     }
 
     // Перевіряємо існування бренда (якщо вказано)
     if (brand_id) {
-      const brandCheck = await client.query(
-        'SELECT id FROM brands WHERE id = $1',
-        [brand_id]
-      );
+      const brandCheck = await db.query("SELECT id FROM brands WHERE id = $1", [
+        brand_id,
+      ]);
       if (brandCheck.rows.length === 0) {
-        throw new Error('Бренд з таким ID не існує');
+        throw new Error("Бренд з таким ID не існує");
       }
     }
 
@@ -358,7 +353,7 @@ const createOffer = async (offerData) => {
       RETURNING *
     `;
 
-    const offerResult = await client.query(offerQuery, [
+    const offerResult = await db.query(offerQuery, [
       name,
       partner_id,
       brand_id,
@@ -374,33 +369,27 @@ const createOffer = async (offerData) => {
     // Додаємо гео регіони
     if (geos && geos.length > 0) {
       // Перевіряємо існування всіх гео регіонів
-      const geoCheck = await client.query(
-        'SELECT id FROM geos WHERE id = ANY($1)',
+      const geoCheck = await db.query(
+        "SELECT id FROM geos WHERE id = ANY($1)",
         [geos]
       );
-      
+
       if (geoCheck.rows.length !== geos.length) {
-        throw new Error('Деякі гео регіони не існують');
+        throw new Error("Деякі гео регіони не існують");
       }
 
       const geoInsertQuery = `
         INSERT INTO offer_geos (offer_id, geo_id)
-        VALUES ${geos.map((_, index) => `($1, $${index + 2})`).join(', ')}
+        VALUES ${geos.map((_, index) => `($1, $${index + 2})`).join(", ")}
       `;
-      
-      await client.query(geoInsertQuery, [newOffer.id, ...geos]);
-    }
 
-    await client.query('COMMIT');
+      await db.query(geoInsertQuery, [newOffer.id, ...geos]);
+    }
 
     // Повертаємо повну інформацію про створений оффер
     return await getOfferById(newOffer.id);
-    
   } catch (error) {
-    await client.query('ROLLBACK');
     throw error;
-  } finally {
-    client.release();
   }
 };
 
@@ -411,11 +400,7 @@ const createOffer = async (offerData) => {
  * @returns {Promise<Object|null>} Оновлений оффер або null
  */
 const updateOffer = async (id, updateData) => {
-  const client = await db.connect();
-  
   try {
-    await client.query('BEGIN');
-
     const {
       name,
       partner_id,
@@ -428,31 +413,29 @@ const updateOffer = async (id, updateData) => {
     } = updateData;
 
     // Перевіряємо існування офферу
-    const offerCheck = await client.query(
-      'SELECT id FROM offers WHERE id = $1',
-      [id]
-    );
+    const offerCheck = await db.query("SELECT id FROM offers WHERE id = $1", [
+      id,
+    ]);
     if (offerCheck.rows.length === 0) {
       return null;
     }
 
     // Перевіряємо існування партнера
-    const partnerCheck = await client.query(
-      'SELECT id FROM partners WHERE id = $1',
+    const partnerCheck = await db.query(
+      "SELECT id FROM partners WHERE id = $1",
       [partner_id]
     );
     if (partnerCheck.rows.length === 0) {
-      throw new Error('Партнер з таким ID не існує');
+      throw new Error("Партнер з таким ID не існує");
     }
 
     // Перевіряємо існування бренда (якщо вказано)
     if (brand_id) {
-      const brandCheck = await client.query(
-        'SELECT id FROM brands WHERE id = $1',
-        [brand_id]
-      );
+      const brandCheck = await db.query("SELECT id FROM brands WHERE id = $1", [
+        brand_id,
+      ]);
       if (brandCheck.rows.length === 0) {
-        throw new Error('Бренд з таким ID не існує');
+        throw new Error("Бренд з таким ID не існує");
       }
     }
 
@@ -465,7 +448,7 @@ const updateOffer = async (id, updateData) => {
       RETURNING *
     `;
 
-    await client.query(updateQuery, [
+    await db.query(updateQuery, [
       name,
       partner_id,
       brand_id,
@@ -478,38 +461,32 @@ const updateOffer = async (id, updateData) => {
 
     // Оновлюємо гео регіони
     // Спочатку видаляємо всі існуючі
-    await client.query('DELETE FROM offer_geos WHERE offer_id = $1', [id]);
+    await db.query("DELETE FROM offer_geos WHERE offer_id = $1", [id]);
 
     // Додаємо нові
     if (geos && geos.length > 0) {
       // Перевіряємо існування всіх гео регіонів
-      const geoCheck = await client.query(
-        'SELECT id FROM geos WHERE id = ANY($1)',
+      const geoCheck = await db.query(
+        "SELECT id FROM geos WHERE id = ANY($1)",
         [geos]
       );
-      
+
       if (geoCheck.rows.length !== geos.length) {
-        throw new Error('Деякі гео регіони не існують');
+        throw new Error("Деякі гео регіони не існують");
       }
 
       const geoInsertQuery = `
         INSERT INTO offer_geos (offer_id, geo_id)
-        VALUES ${geos.map((_, index) => `($1, $${index + 2})`).join(', ')}
+        VALUES ${geos.map((_, index) => `($1, $${index + 2})`).join(", ")}
       `;
-      
-      await client.query(geoInsertQuery, [id, ...geos]);
-    }
 
-    await client.query('COMMIT');
+      await db.query(geoInsertQuery, [id, ...geos]);
+    }
 
     // Повертаємо повну інформацію про оновлений оффер
     return await getOfferById(id);
-    
   } catch (error) {
-    await client.query('ROLLBACK');
     throw error;
-  } finally {
-    client.release();
   }
 };
 
@@ -528,7 +505,7 @@ const updateOfferStatus = async (id, isActive) => {
   `;
 
   const result = await db.query(query, [isActive, id]);
-  
+
   if (result.rows.length === 0) {
     return null;
   }
@@ -543,39 +520,29 @@ const updateOfferStatus = async (id, isActive) => {
  * @returns {Promise<boolean>} true, якщо оффер видалено
  */
 const deleteOffer = async (id) => {
-  const client = await db.connect();
-  
   try {
-    await client.query('BEGIN');
-
     // Перевіряємо чи є пов'язані потоки
-    const flowsCheck = await client.query(
-      'SELECT COUNT(*) as count FROM flows WHERE offer_id = $1',
+    const flowsCheck = await db.query(
+      "SELECT COUNT(*) as count FROM flows WHERE offer_id = $1",
       [id]
     );
-    
+
     if (parseInt(flowsCheck.rows[0].count) > 0) {
-      throw new Error('Неможливо видалити оффер, який має пов\'язані потоки');
+      throw new Error("Неможливо видалити оффер, який має пов'язані потоки");
     }
 
     // Видаляємо пов'язані гео регіони
-    await client.query('DELETE FROM offer_geos WHERE offer_id = $1', [id]);
+    await db.query("DELETE FROM offer_geos WHERE offer_id = $1", [id]);
 
     // Видаляємо оффер
-    const result = await client.query(
-      'DELETE FROM offers WHERE id = $1 RETURNING id',
+    const result = await db.query(
+      "DELETE FROM offers WHERE id = $1 RETURNING id",
       [id]
     );
 
-    await client.query('COMMIT');
-    
     return result.rows.length > 0;
-    
   } catch (error) {
-    await client.query('ROLLBACK');
     throw error;
-  } finally {
-    client.release();
   }
 };
 

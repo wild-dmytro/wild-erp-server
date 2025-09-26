@@ -667,23 +667,20 @@ const updateFlow = async (id, flowData) => {
 const deleteFlow = async (id) => {
   try {
     // Перевіряємо наявність пов'язаних записів
-    const [statsResult, communicationsResult, payoutFlowsResult] =
-      await Promise.all([
-        db.query(
-          "SELECT COUNT(*) as count FROM flow_stats WHERE flow_id = $1",
-          [id]
-        ),
-        db.query(
-          "SELECT COUNT(*) as count FROM partner_payout_flows WHERE flow_id = $1",
-          [id]
-        ),
-      ]);
+    const [statsResult, payoutFlowsResult] = await Promise.all([
+      db.query("SELECT COUNT(*) as count FROM flow_stats WHERE flow_id = $1", [
+        id,
+      ]),
+      db.query(
+        "SELECT COUNT(*) as count FROM partner_payout_flows WHERE flow_id = $1",
+        [id]
+      ),
+    ]);
 
-    const hasStats = parseInt(statsResult.rows[0].count) > 0;
-    const hasCommunications = parseInt(communicationsResult.rows[0].count) > 0;
-    const hasPayoutFlows = parseInt(payoutFlowsResult.rows[0].count) > 0;
+    const hasStats = parseInt(statsResult.rows[0]?.count) > 0;
+    const hasPayoutFlows = parseInt(payoutFlowsResult.rows[0]?.count) > 0;
 
-    if (hasStats || hasCommunications || hasPayoutFlows) {
+    if (hasStats || hasPayoutFlows) {
       return {
         success: false,
         message:
@@ -698,11 +695,14 @@ const deleteFlow = async (id) => {
     );
 
     return {
-      success: result.rows.length > 0,
+      success: result.rows?.length > 0,
       message:
-        result.rows.length > 0 ? "Потік успішно видалено" : "Потік не знайдено",
+        result.rows?.length > 0
+          ? "Потік успішно видалено"
+          : "Потік не знайдено",
     };
   } catch (error) {
+    console.error(error);
     return {
       success: false,
       message: "Помилка при видаленні потоку",

@@ -575,10 +575,14 @@ const partnerPayoutModel = {
     if (startDate) {
       whereConditions.push(`ppr.period_start >= $${paramIndex++}`);
       params.push(startDate);
-    } else if (endDate) {
+    }
+
+    if (endDate) {
       whereConditions.push(`ppr.period_end <= $${paramIndex++}`);
       params.push(endDate);
     }
+
+    console.log(whereConditions);
 
     // Фільтрація по команді
     if (teamId) {
