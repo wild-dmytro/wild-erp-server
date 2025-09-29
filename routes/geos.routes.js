@@ -1,9 +1,9 @@
-const express = require('express');
+const express = require("express");
 const router = express.Router();
-const geosController = require('../controllers/geo.controller');
-const authMiddleware = require('../middleware/auth.middleware');
-const roleMiddleware = require('../middleware/role.middleware');
-const { check } = require('express-validator');
+const geosController = require("../controllers/geo.controller");
+const authMiddleware = require("../middleware/auth.middleware");
+const roleMiddleware = require("../middleware/role.middleware");
+const { check } = require("express-validator");
 
 // Застосовуємо middleware авторизації до всіх маршрутів
 router.use(authMiddleware);
@@ -14,8 +14,8 @@ router.use(authMiddleware);
  * @access  Private/Admin/BizDev
  */
 router.get(
-  '/',
-  roleMiddleware('admin', "teamlead", 'bizdev', 'buyer'),
+  "/",
+  roleMiddleware("admin", "teamlead", "bizdev", "buyer", "affiliate_manager"),
   geosController.getAll
 );
 
@@ -24,11 +24,7 @@ router.get(
  * @desc    Отримання детальної інформації про гео за ID
  * @access  Private/Admin/BizDev
  */
-router.get(
-  '/:id',
-  roleMiddleware('admin', 'bizdev'),
-  geosController.getById
-);
+router.get("/:id", roleMiddleware("admin", "bizdev"), geosController.getById);
 
 /**
  * @route   POST /api/geos
@@ -36,13 +32,15 @@ router.get(
  * @access  Private/Admin/BizDev
  */
 router.post(
-  '/',
-  roleMiddleware('admin', 'bizdev'),
+  "/",
+  roleMiddleware("admin", "bizdev"),
   [
-    check('name', 'Назва гео є обов\'язковою').notEmpty(),
-    check('name', 'Назва гео має бути рядком').isString(),
-    check('country_code', 'Код країни має бути рядком довжиною 2 символи').optional().isLength({ min: 2, max: 2 }),
-    check('region', 'Регіон має бути рядком').optional().isString()
+    check("name", "Назва гео є обов'язковою").notEmpty(),
+    check("name", "Назва гео має бути рядком").isString(),
+    check("country_code", "Код країни має бути рядком довжиною 2 символи")
+      .optional()
+      .isLength({ min: 2, max: 2 }),
+    check("region", "Регіон має бути рядком").optional().isString(),
   ],
   geosController.create
 );
@@ -53,12 +51,14 @@ router.post(
  * @access  Private/Admin/BizDev
  */
 router.put(
-  '/:id',
-  roleMiddleware('admin', 'bizdev'),
+  "/:id",
+  roleMiddleware("admin", "bizdev"),
   [
-    check('name', 'Назва гео має бути рядком').optional().isString(),
-    check('country_code', 'Код країни має бути рядком довжиною 2 символи').optional().isLength({ min: 2, max: 2 }),
-    check('region', 'Регіон має бути рядком').optional().isString()
+    check("name", "Назва гео має бути рядком").optional().isString(),
+    check("country_code", "Код країни має бути рядком довжиною 2 символи")
+      .optional()
+      .isLength({ min: 2, max: 2 }),
+    check("region", "Регіон має бути рядком").optional().isString(),
   ],
   geosController.update
 );
@@ -69,11 +69,9 @@ router.put(
  * @access  Private/Admin/BizDev
  */
 router.patch(
-  '/:id/status',
-  roleMiddleware('admin', 'bizdev'),
-  [
-    check('is_active', 'Статус є обов\'язковим').isBoolean()
-  ],
+  "/:id/status",
+  roleMiddleware("admin", "bizdev"),
+  [check("is_active", "Статус є обов'язковим").isBoolean()],
   geosController.updateStatus
 );
 
@@ -82,10 +80,6 @@ router.patch(
  * @desc    Видалення гео
  * @access  Private/Admin
  */
-router.delete(
-  '/:id',
-  roleMiddleware('admin'),
-  geosController.delete
-);
+router.delete("/:id", roleMiddleware("admin"), geosController.delete);
 
 module.exports = router;

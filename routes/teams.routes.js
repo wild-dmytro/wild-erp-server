@@ -1,9 +1,9 @@
-const express = require('express');
+const express = require("express");
 const router = express.Router();
-const teamsController = require('../controllers/teams.controller');
-const authMiddleware = require('../middleware/auth.middleware');
-const roleMiddleware = require('../middleware/role.middleware');
-const { check } = require('express-validator');
+const teamsController = require("../controllers/teams.controller");
+const authMiddleware = require("../middleware/auth.middleware");
+const roleMiddleware = require("../middleware/role.middleware");
+const { check } = require("express-validator");
 
 // Застосовуємо middleware авторизації до всіх маршрутів
 router.use(authMiddleware);
@@ -14,8 +14,8 @@ router.use(authMiddleware);
  * @access  Private/Admin/TeamLead
  */
 router.get(
-  '/',
-  roleMiddleware('admin', 'teamlead', 'bizdev', 'buyer'),
+  "/",
+  roleMiddleware("admin", "teamlead", "bizdev", "buyer", "affiliate_manager"),
   teamsController.getAllTeams
 );
 
@@ -25,8 +25,8 @@ router.get(
  * @access  Private/Admin/TeamLead
  */
 router.get(
-  '/:id',
-  roleMiddleware('admin', 'teamlead'),
+  "/:id",
+  roleMiddleware("admin", "teamlead"),
   teamsController.getTeamById
 );
 
@@ -36,11 +36,11 @@ router.get(
  * @access  Private/Admin
  */
 router.post(
-  '/',
-  roleMiddleware('admin'),
+  "/",
+  roleMiddleware("admin"),
   [
-    check('name', 'Назва команди є обов\'язковою').notEmpty(),
-    check('name', 'Назва команди має бути рядком').isString()
+    check("name", "Назва команди є обов'язковою").notEmpty(),
+    check("name", "Назва команди має бути рядком").isString(),
   ],
   teamsController.createTeam
 );
@@ -51,11 +51,11 @@ router.post(
  * @access  Private/Admin
  */
 router.put(
-  '/:id',
-  roleMiddleware('admin'),
+  "/:id",
+  roleMiddleware("admin"),
   [
-    check('name', 'Назва команди є обов\'язковою').notEmpty(),
-    check('name', 'Назва команди має бути рядком').isString()
+    check("name", "Назва команди є обов'язковою").notEmpty(),
+    check("name", "Назва команди має бути рядком").isString(),
   ],
   teamsController.updateTeam
 );
@@ -65,10 +65,6 @@ router.put(
  * @desc    Видалення команди
  * @access  Private/Admin
  */
-router.delete(
-  '/:id',
-  roleMiddleware('admin'),
-  teamsController.deleteTeam
-);
+router.delete("/:id", roleMiddleware("admin"), teamsController.deleteTeam);
 
 module.exports = router;

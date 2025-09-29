@@ -1,8 +1,8 @@
-const express = require('express');
+const express = require("express");
 const router = express.Router();
-const offersController = require('../controllers/offers.controller');
-const authMiddleware = require('../middleware/auth.middleware');
-const roleMiddleware = require('../middleware/role.middleware');
+const offersController = require("../controllers/offers.controller");
+const authMiddleware = require("../middleware/auth.middleware");
+const roleMiddleware = require("../middleware/role.middleware");
 
 // Застосовуємо middleware авторизації до всіх маршрутів
 router.use(authMiddleware);
@@ -22,8 +22,8 @@ router.use(authMiddleware);
  * @query   {string} [sortOrder=desc] - Порядок сортування (asc|desc)
  */
 router.get(
-  '/',
-  roleMiddleware('admin', "teamlead", 'bizdev', 'buyer'),
+  "/",
+  roleMiddleware("admin", "teamlead", "bizdev", "buyer", "affiliate_manager"),
   offersController.getAllOffers
 );
 
@@ -33,8 +33,8 @@ router.get(
  * @access  Private/Admin/BizDev
  */
 router.get(
-  '/stats',
-  roleMiddleware('admin', 'bizdev'),
+  "/stats",
+  roleMiddleware("admin", "bizdev"),
   offersController.getOffersStats
 );
 
@@ -45,8 +45,8 @@ router.get(
  * @param   {number} id - ID офферу
  */
 router.get(
-  '/:id',
-  roleMiddleware('admin', 'bizdev'),
+  "/:id",
+  roleMiddleware("admin", "bizdev"),
   offersController.getOfferById
 );
 
@@ -64,8 +64,8 @@ router.get(
  * @body    {boolean} [is_active=true] - Статус активності
  */
 router.post(
-  '/',
-  roleMiddleware('admin', 'bizdev'),
+  "/",
+  roleMiddleware("admin", "bizdev"),
   offersController.createOffer
 );
 
@@ -84,8 +84,8 @@ router.post(
  * @body    {boolean} is_active - Статус активності
  */
 router.put(
-  '/:id',
-  roleMiddleware('admin', 'bizdev'),
+  "/:id",
+  roleMiddleware("admin", "bizdev"),
   offersController.updateOffer
 );
 
@@ -97,8 +97,8 @@ router.put(
  * @body    {boolean} is_active - Новий статус активності
  */
 router.patch(
-  '/:id/status',
-  roleMiddleware('admin', 'bizdev'),
+  "/:id/status",
+  roleMiddleware("admin", "bizdev"),
   offersController.updateOfferStatus
 );
 
@@ -109,8 +109,8 @@ router.patch(
  * @param   {number} id - ID офферу
  */
 router.delete(
-  '/:id',
-  roleMiddleware('admin', 'bizdev'),
+  "/:id",
+  roleMiddleware("admin", "bizdev"),
   offersController.deleteOffer
 );
 

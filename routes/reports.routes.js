@@ -133,7 +133,7 @@ router.get("/stats/departments", reportsController.getDepartmentExpenseStats);
  */
 router.get(
   "/overview/bizdev",
-  roleMiddleware("admin", "bizdev"),
+  roleMiddleware("admin", "bizdev", "affiliate_manager"),
   reportsController.getBizdevOverview
 );
 

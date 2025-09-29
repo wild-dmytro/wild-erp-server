@@ -445,7 +445,9 @@ const getDailyFlowsStats = async (options) => {
  */
 const checkUserAccess = async (flow_id, user_id, user_role) => {
   // Admin, bizdev, teamlead можуть переглядати та редагувати всю статистику
-  if (["admin", "bizdev", "teamlead"].includes(user_role)) {
+  if (
+    ["admin", "bizdev", "teamlead", "affiliate_manager"].includes(user_role)
+  ) {
     const query = `SELECT 1 FROM flows WHERE id = $1 LIMIT 1`;
     const result = await db.query(query, [flow_id]);
     return result.rows.length > 0;
@@ -487,7 +489,10 @@ const getFlowStats = async (
     paramIndex++;
     conditions.push(`fs.user_id = $${paramIndex}`);
     params.push(requesting_user_id);
-  } else if (user_id && ["admin", "bizdev", "teamlead"].includes(user_role)) {
+  } else if (
+    user_id &&
+    ["admin", "bizdev", "teamlead", "affiliate_manager"].includes(user_role)
+  ) {
     // Інші ролі можуть фільтрувати по конкретному користувачу
     paramIndex++;
     conditions.push(`fs.user_id = $${paramIndex}`);

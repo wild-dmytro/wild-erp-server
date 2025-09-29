@@ -537,7 +537,9 @@ const applyRoleFilters = async (req, options) => {
       case "bizdev":
         // Повний доступ
         return { success: true };
-
+      case "affiliate_manager":
+        // Повний доступ
+        return { success: true };
       case "teamlead":
         if (!teamId) {
           return {

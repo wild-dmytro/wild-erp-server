@@ -1,9 +1,9 @@
-const express = require('express');
+const express = require("express");
 const router = express.Router();
-const brandsController = require('../controllers/brands.controller');
-const authMiddleware = require('../middleware/auth.middleware');
-const roleMiddleware = require('../middleware/role.middleware');
-const { check } = require('express-validator');
+const brandsController = require("../controllers/brands.controller");
+const authMiddleware = require("../middleware/auth.middleware");
+const roleMiddleware = require("../middleware/role.middleware");
+const { check } = require("express-validator");
 
 // Застосовуємо middleware авторизації до всіх маршрутів
 router.use(authMiddleware);
@@ -14,8 +14,8 @@ router.use(authMiddleware);
  * @access  Private/Admin/BizDev
  */
 router.get(
-  '/',
-  roleMiddleware('admin', "teamlead", 'bizdev', 'buyer'),
+  "/",
+  roleMiddleware("admin", "teamlead", "bizdev", "buyer", "affiliate_manager"),
   brandsController.getAll
 );
 
@@ -24,11 +24,7 @@ router.get(
  * @desc    Отримання детальної інформації про бренд за ID
  * @access  Private/Admin/BizDev
  */
-router.get(
-  '/:id',
-  roleMiddleware('admin', 'bizdev'),
-  brandsController.getById
-);
+router.get("/:id", roleMiddleware("admin", "bizdev"), brandsController.getById);
 
 /**
  * @route   POST /api/brands
@@ -36,12 +32,12 @@ router.get(
  * @access  Private/Admin/BizDev
  */
 router.post(
-  '/',
-  roleMiddleware('admin', 'bizdev'),
+  "/",
+  roleMiddleware("admin", "bizdev"),
   [
-    check('name', 'Назва бренда є обов\'язковою').notEmpty(),
-    check('name', 'Назва бренда має бути рядком').isString(),
-    check('description', 'Опис має бути рядком').optional().isString()
+    check("name", "Назва бренда є обов'язковою").notEmpty(),
+    check("name", "Назва бренда має бути рядком").isString(),
+    check("description", "Опис має бути рядком").optional().isString(),
   ],
   brandsController.create
 );
@@ -52,11 +48,11 @@ router.post(
  * @access  Private/Admin/BizDev
  */
 router.put(
-  '/:id',
-  roleMiddleware('admin', 'bizdev'),
+  "/:id",
+  roleMiddleware("admin", "bizdev"),
   [
-    check('name', 'Назва бренда має бути рядком').optional().isString(),
-    check('description', 'Опис має бути рядком').optional().isString()
+    check("name", "Назва бренда має бути рядком").optional().isString(),
+    check("description", "Опис має бути рядком").optional().isString(),
   ],
   brandsController.update
 );
@@ -67,11 +63,9 @@ router.put(
  * @access  Private/Admin/BizDev
  */
 router.patch(
-  '/:id/status',
-  roleMiddleware('admin', 'bizdev'),
-  [
-    check('is_active', 'Статус є обов\'язковим').isBoolean()
-  ],
+  "/:id/status",
+  roleMiddleware("admin", "bizdev"),
+  [check("is_active", "Статус є обов'язковим").isBoolean()],
   brandsController.updateStatus
 );
 
@@ -80,10 +74,6 @@ router.patch(
  * @desc    Видалення бренда
  * @access  Private/Admin
  */
-router.delete(
-  '/:id',
-  roleMiddleware('admin'),
-  brandsController.delete
-);
+router.delete("/:id", roleMiddleware("admin"), brandsController.delete);
 
 module.exports = router;
