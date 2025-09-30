@@ -109,6 +109,7 @@ exports.getUserById = async (req, res) => {
       currentUserRole !== "admin" &&
       currentUserRole !== "bizdev" &&
       currentUserRole !== "teamlead" &&
+      currentUserRole !== "affiliate_manager" &&
       currentUserId !== userId
     ) {
       // Якщо це тімлід, перевіряємо, чи користувач у його команді

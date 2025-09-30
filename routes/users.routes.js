@@ -26,7 +26,7 @@ router.get(
  */
 router.get(
   "/:id",
-  roleMiddleware("admin", "teamlead", "bizdev"),
+  roleMiddleware("admin", "teamlead", "bizdev", "affiliate_manager"),
   usersController.getUserById
 );
 
