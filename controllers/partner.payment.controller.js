@@ -18,18 +18,31 @@ exports.getAllPayments = async (req, res) => {
       startDate,
       endDate,
       sortBy = "created_at",
-      sortOrder = "desc"
+      sortOrder = "desc",
     } = req.query;
 
     // Перевірка коректності параметрів
     const errors = [];
     if (payoutRequestId && isNaN(parseInt(payoutRequestId))) {
-      errors.push({ param: "payoutRequestId", msg: "ID заявки на виплату має бути числом" });
+      errors.push({
+        param: "payoutRequestId",
+        msg: "ID заявки на виплату має бути числом",
+      });
     }
-    if (status && !['pending', 'processing', 'completed', 'hold', 'failed', 'cancelled'].includes(status)) {
+    if (
+      status &&
+      ![
+        "pending",
+        "processing",
+        "completed",
+        "hold",
+        "failed",
+        "cancelled",
+      ].includes(status)
+    ) {
       errors.push({ param: "status", msg: "Невірний статус платежу" });
     }
-    if (currency && !['USD', 'EUR', 'GBP'].includes(currency)) {
+    if (currency && !["USD", "EUR", "GBP"].includes(currency)) {
       errors.push({ param: "currency", msg: "Невірна валюта" });
     }
     if (startDate && isNaN(Date.parse(startDate))) {
@@ -57,13 +70,13 @@ exports.getAllPayments = async (req, res) => {
       startDate: startDate ? new Date(startDate) : undefined,
       endDate: endDate ? new Date(endDate) : undefined,
       sortBy,
-      sortOrder
+      sortOrder,
     });
 
     res.json({
       success: true,
       data: result.data,
-      pagination: result.pagination
+      pagination: result.pagination,
     });
   } catch (err) {
     console.error("Помилка отримання платежів:", err);
@@ -129,22 +142,22 @@ exports.createPayment = async (req, res) => {
       });
     }
 
-    const { transaction_hash } = req.body;
+    // const { transaction_hash } = req.body;
 
     // Перевірка унікальності хешу транзакції, якщо він вказаний
-    if (transaction_hash) {
-      const exists = await partnerPaymentModel.paymentExistsByHash(transaction_hash);
-      if (exists) {
-        return res.status(400).json({
-          success: false,
-          message: "Платіж з таким хешем транзакції вже існує",
-        });
-      }
-    }
+    // if (transaction_hash) {
+    //   const exists = await partnerPaymentModel.paymentExistsByHash(transaction_hash);
+    //   if (exists) {
+    //     return res.status(400).json({
+    //       success: false,
+    //       message: "Платіж з таким хешем транзакції вже існує",
+    //     });
+    //   }
+    // }
 
     const paymentData = {
       ...req.body,
-      created_by: req.userId
+      created_by: req.userId,
     };
 
     // Створення платежу
@@ -157,9 +170,9 @@ exports.createPayment = async (req, res) => {
     });
   } catch (err) {
     console.error("Помилка створення платежу:", err);
-    
+
     // Перевірка на foreign key constraint
-    if (err.code === '23503') {
+    if (err.code === "23503") {
       return res.status(400).json({
         success: false,
         message: "Вказана заявка на виплату не існує",
@@ -208,7 +221,7 @@ exports.updatePayment = async (req, res) => {
     }
 
     // Перевірка можливості редагування
-    if (['completed', 'cancelled'].includes(existingPayment.status)) {
+    if (["completed", "cancelled"].includes(existingPayment.status)) {
       return res.status(400).json({
         success: false,
         message: "Неможливо редагувати платіж з таким статусом",
@@ -218,8 +231,14 @@ exports.updatePayment = async (req, res) => {
     const { transaction_hash } = req.body;
 
     // Перевірка унікальності хешу транзакції, якщо він змінюється
-    if (transaction_hash && transaction_hash !== existingPayment.transaction_hash) {
-      const exists = await partnerPaymentModel.paymentExistsByHash(transaction_hash, paymentId);
+    if (
+      transaction_hash &&
+      transaction_hash !== existingPayment.transaction_hash
+    ) {
+      const exists = await partnerPaymentModel.paymentExistsByHash(
+        transaction_hash,
+        paymentId
+      );
       if (exists) {
         return res.status(400).json({
           success: false,
@@ -229,7 +248,10 @@ exports.updatePayment = async (req, res) => {
     }
 
     // Оновлення платежу
-    const updatedPayment = await partnerPaymentModel.updatePayment(paymentId, req.body);
+    const updatedPayment = await partnerPaymentModel.updatePayment(
+      paymentId,
+      req.body
+    );
 
     if (!updatedPayment) {
       return res.status(400).json({
@@ -269,7 +291,8 @@ exports.updatePaymentStatus = async (req, res) => {
     }
 
     const paymentId = parseInt(req.params.id);
-    const { status, transaction_hash, block_number, failure_reason, notes } = req.body;
+    const { status, transaction_hash, block_number, failure_reason, notes } =
+      req.body;
 
     if (isNaN(paymentId)) {
       return res.status(400).json({
@@ -306,20 +329,20 @@ exports.updatePaymentStatus = async (req, res) => {
 
     // Додаткові дані залежно від статусу
     const additionalData = {};
-    if (status === 'completed') {
+    if (status === "completed") {
       if (transaction_hash) additionalData.transaction_hash = transaction_hash;
       if (block_number) additionalData.block_number = block_number;
-    } else if (status === 'failed') {
+    } else if (status === "failed") {
       if (failure_reason) additionalData.failure_reason = failure_reason;
-    } else if (status === 'hold') {
+    } else if (status === "hold") {
       if (notes) additionalData.notes = notes;
     }
 
     // Оновлення статусу
     const updatedPayment = await partnerPaymentModel.updatePaymentStatus(
-      paymentId, 
-      status, 
-      req.userId, 
+      paymentId,
+      status,
+      req.userId,
       additionalData
     );
 
@@ -329,7 +352,10 @@ exports.updatePaymentStatus = async (req, res) => {
       message: `Статус платежу успішно змінено на "${status}"`,
     });
   } catch (err) {
-    console.error(`Помилка оновлення статусу платежу з ID ${req.params.id}:`, err);
+    console.error(
+      `Помилка оновлення статусу платежу з ID ${req.params.id}:`,
+      err
+    );
     res.status(500).json({
       success: false,
       message: "Помилка сервера під час оновлення статусу платежу",
@@ -402,14 +428,19 @@ exports.getPaymentsByPayoutRequest = async (req, res) => {
     }
 
     // Отримання платежів
-    const payments = await partnerPaymentModel.getPaymentsByPayoutRequest(payoutRequestId);
+    const payments = await partnerPaymentModel.getPaymentsByPayoutRequest(
+      payoutRequestId
+    );
 
     res.json({
       success: true,
       data: payments,
     });
   } catch (err) {
-    console.error(`Помилка отримання платежів заявки з ID ${req.params.payoutRequestId}:`, err);
+    console.error(
+      `Помилка отримання платежів заявки з ID ${req.params.payoutRequestId}:`,
+      err
+    );
     res.status(500).json({
       success: false,
       message: "Помилка сервера під час отримання платежів заявки",
