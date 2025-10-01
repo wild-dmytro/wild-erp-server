@@ -154,15 +154,14 @@ const getAllFlows = async (options = {}) => {
   // ВИПРАВЛЕНО: Пошук - використовуємо один параметр для всіх умов
   if (search) {
     const searchParam = `%${search}%`;
-    conditions.push(`(
-      f.name ILIKE ${paramIndex} OR 
-      f.description ILIKE ${paramIndex} OR 
-      o.name ILIKE ${paramIndex} OR
-      g.name ILIKE ${paramIndex} OR
-      tm.name ILIKE ${paramIndex} OR
-      b.name ILIKE ${paramIndex}
-    )`);
+    conditions.push(
+      `(f.name ILIKE $${paramIndex} OR f.description ILIKE $${paramIndex} OR o.name ILIKE $${paramIndex} OR g.name ILIKE $${paramIndex} OR tm.name ILIKE $${paramIndex} OR b.name ILIKE $${paramIndex})`
+    );
     params.push(searchParam);
+    console.log(conditions);
+    console.log(searchParam);
+    console.log(paramIndex);
+
     paramIndex++;
   }
 

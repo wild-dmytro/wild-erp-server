@@ -63,7 +63,7 @@ router.get(
  */
 router.get(
   "/stats/overview",
-  roleMiddleware("admin", "teamlead", "bizdev", "buyer"),
+  roleMiddleware("admin", "teamlead", "bizdev", "buyer", "affiliate_manager"),
   [
     query("dateFrom", "Недійсна дата початку").optional().isDate(),
     query("dateTo", "Недійсна дата завершення").optional().isDate(),
@@ -214,8 +214,6 @@ router.post(
     check("is_active", "is_active має бути булевим значенням")
       .optional()
       .isBoolean(),
-    check("start_date", "Недійсна дата початку").optional().isISO8601(),
-    check("stop_date", "Недійсна дата завершення").optional().isISO8601(),
     check("conditions", "Умови мають бути рядком").optional().isString(),
     check("description", "Опис має бути рядком").optional().isString(),
     check("notes", "Нотатки мають бути рядком").optional().isString(),
