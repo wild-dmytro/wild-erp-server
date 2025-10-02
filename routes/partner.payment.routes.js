@@ -1,9 +1,9 @@
-const express = require('express');
+const express = require("express");
 const router = express.Router();
-const partnerPaymentsController = require('../controllers/partner.payment.controller');
-const authMiddleware = require('../middleware/auth.middleware');
-const roleMiddleware = require('../middleware/role.middleware');
-const { check } = require('express-validator');
+const partnerPaymentsController = require("../controllers/partner.payment.controller");
+const authMiddleware = require("../middleware/auth.middleware");
+const roleMiddleware = require("../middleware/role.middleware");
+const { check } = require("express-validator");
 
 // Застосовуємо middleware авторизації до всіх маршрутів
 router.use(authMiddleware);
@@ -14,8 +14,8 @@ router.use(authMiddleware);
  * @access  Private/Admin/Finance
  */
 router.get(
-  '/',
-  roleMiddleware('admin', 'bizdev'),
+  "/",
+  roleMiddleware("admin", "bizdev"),
   partnerPaymentsController.getAllPayments
 );
 
@@ -25,8 +25,8 @@ router.get(
  * @access  Private/Admin/Finance
  */
 router.get(
-  '/payout-request/:payoutRequestId',
-  roleMiddleware('admin', 'bizdev', 'teamlead'),
+  "/payout-request/:payoutRequestId",
+  roleMiddleware("admin", "bizdev", "teamlead"),
   partnerPaymentsController.getPaymentsByPayoutRequest
 );
 
@@ -36,8 +36,8 @@ router.get(
  * @access  Private/Admin/Finance
  */
 router.get(
-  '/:id',
-  roleMiddleware('admin', 'bizdev'),
+  "/:id",
+  roleMiddleware("admin", "bizdev"),
   partnerPaymentsController.getPaymentById
 );
 
@@ -47,16 +47,24 @@ router.get(
  * @access  Private/Admin/Finance
  */
 router.post(
-  '/',
-  roleMiddleware('admin', 'bizdev'),
+  "/",
+  roleMiddleware("admin", "bizdev"),
   [
-    check('payout_request_id', 'ID заявки на виплату є обов\'язковим').notEmpty().isInt(),
-    check('amount', 'Сума платежу є обов\'язковою').notEmpty().isFloat({ min: 0 }),
-    check('currency', 'Недійсна валюта').optional().isIn(['USD', 'EUR', 'GBP']),
-    check('transaction_hash', 'Хеш транзакції має бути рядком').optional().isString(),
-    check('network', 'Мережа має бути рядком').optional().isString(),
-    check('wallet_address', 'Адреса гаманця має бути рядком').optional().isString(),
-    check('notes', 'Примітки мають бути рядком').optional().isString()
+    check("payout_request_id", "ID заявки на виплату є обов'язковим")
+      .notEmpty()
+      .isInt(),
+    check("amount", "Сума платежу є обов'язковою")
+      .notEmpty()
+      .isFloat({ min: 0 }),
+    check("currency", "Недійсна валюта").optional().isIn(["USD", "EUR", "GBP"]),
+    check("transaction_hash", "Хеш транзакції має бути рядком")
+      .optional()
+      .isString(),
+    check("network", "Мережа має бути рядком").optional().isString(),
+    check("wallet_address", "Адреса гаманця має бути рядком")
+      .optional()
+      .isString(),
+    check("notes", "Примітки мають бути рядком").optional().isString(),
   ],
   partnerPaymentsController.createPayment
 );
@@ -67,19 +75,21 @@ router.post(
  * @access  Private/Admin/Finance
  */
 router.put(
-  '/:id',
-  roleMiddleware('admin', 'bizdev'),
+  "/:id",
+  roleMiddleware("admin", "bizdev"),
   [
-    check('amount', 'Сума платежу має бути числом').optional().isFloat({ min: 0 }),
-    check('currency', 'Недійсна валюта').optional().isIn(['USD', 'EUR', 'GBP']),
-    check('transaction_hash', 'Хеш транзакції має бути рядком').optional().isString(),
-    check('network', 'Мережа має бути рядком').optional().isString(),
-    check('wallet_address', 'Адреса гаманця має бути рядком').optional().isString(),
-    check('notes', 'Примітки мають бути рядком').optional().isString(),
-    check('failure_reason', 'Причина невдачі має бути рядком').optional().isString(),
-    check('block_number', 'Номер блоку має бути числом').optional().isInt(),
-    check('gas_used', 'Використаний газ має бути числом').optional().isInt(),
-    check('gas_price', 'Ціна газу має бути числом').optional().isNumeric()
+    check("amount", "Сума платежу має бути числом")
+      .optional()
+      .isFloat({ min: 0 }),
+    // check('currency', 'Недійсна валюта').optional().isIn(['USD', 'EUR', 'GBP']),
+    // check('transaction_hash', 'Хеш транзакції має бути рядком').optional().isString(),
+    // check('network', 'Мережа має бути рядком').optional().isString(),
+    // check('wallet_address', 'Адреса гаманця має бути рядком').optional().isString(),
+    // check('notes', 'Примітки мають бути рядком').optional().isString(),
+    // check('failure_reason', 'Причина невдачі має бути рядком').optional().isString(),
+    // check("block_number", "Номер блоку має бути числом").optional().isInt(),
+    // check("gas_used", "Використаний газ має бути числом").optional().isInt(),
+    // check("gas_price", "Ціна газу має бути числом").optional().isNumeric(),
   ],
   partnerPaymentsController.updatePayment
 );
@@ -90,15 +100,26 @@ router.put(
  * @access  Private/Admin/Finance
  */
 router.patch(
-  '/:id/status',
-  roleMiddleware('admin', 'bizdev'),
+  "/:id/status",
+  roleMiddleware("admin", "bizdev"),
   [
-    check('status', 'Статус є обов\'язковим').notEmpty(),
-    check('status', 'Недійсний статус платежу').isIn(['pending', 'processing', 'completed', 'hold', 'failed', 'cancelled']),
-    check('transaction_hash', 'Хеш транзакції має бути рядком').optional().isString(),
-    check('block_number', 'Номер блоку має бути числом').optional().isInt(),
-    check('failure_reason', 'Причина невдачі має бути рядком').optional().isString(),
-    check('notes', 'Примітки мають бути рядком').optional().isString()
+    check("status", "Статус є обов'язковим").notEmpty(),
+    check("status", "Недійсний статус платежу").isIn([
+      "pending",
+      "processing",
+      "completed",
+      "hold",
+      "failed",
+      "cancelled",
+    ]),
+    // check("transaction_hash", "Хеш транзакції має бути рядком")
+    //   .optional()
+    //   .isString(),
+    // check("block_number", "Номер блоку має бути числом").optional().isInt(),
+    // check("failure_reason", "Причина невдачі має бути рядком")
+    //   .optional()
+    //   .isString(),
+    // check("notes", "Примітки мають бути рядком").optional().isString(),
   ],
   partnerPaymentsController.updatePaymentStatus
 );
@@ -109,8 +130,8 @@ router.patch(
  * @access  Private/Admin
  */
 router.delete(
-  '/:id',
-  roleMiddleware('admin', 'bizdev'),
+  "/:id",
+  roleMiddleware("admin", "bizdev"),
   partnerPaymentsController.deletePayment
 );
 

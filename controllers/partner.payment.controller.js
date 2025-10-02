@@ -220,32 +220,32 @@ exports.updatePayment = async (req, res) => {
       });
     }
 
-    // Перевірка можливості редагування
-    if (["completed", "cancelled"].includes(existingPayment.status)) {
-      return res.status(400).json({
-        success: false,
-        message: "Неможливо редагувати платіж з таким статусом",
-      });
-    }
+    // // Перевірка можливості редагування
+    // if (["completed", "cancelled"].includes(existingPayment.status)) {
+    //   return res.status(400).json({
+    //     success: false,
+    //     message: "Неможливо редагувати платіж з таким статусом",
+    //   });
+    // }
 
-    const { transaction_hash } = req.body;
+    // const { transaction_hash } = req.body;
 
     // Перевірка унікальності хешу транзакції, якщо він змінюється
-    if (
-      transaction_hash &&
-      transaction_hash !== existingPayment.transaction_hash
-    ) {
-      const exists = await partnerPaymentModel.paymentExistsByHash(
-        transaction_hash,
-        paymentId
-      );
-      if (exists) {
-        return res.status(400).json({
-          success: false,
-          message: "Платіж з таким хешем транзакції вже існує",
-        });
-      }
-    }
+    // if (
+    //   transaction_hash &&
+    //   transaction_hash !== existingPayment.transaction_hash
+    // ) {
+    //   const exists = await partnerPaymentModel.paymentExistsByHash(
+    //     transaction_hash,
+    //     paymentId
+    //   );
+    //   if (exists) {
+    //     return res.status(400).json({
+    //       success: false,
+    //       message: "Платіж з таким хешем транзакції вже існує",
+    //     });
+    //   }
+    // }
 
     // Оновлення платежу
     const updatedPayment = await partnerPaymentModel.updatePayment(
