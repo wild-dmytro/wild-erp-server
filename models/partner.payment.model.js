@@ -27,7 +27,7 @@ const partnerPaymentModel = {
     startDate,
     endDate,
     sortBy = "created_at",
-    sortOrder = "desc"
+    sortOrder = "desc",
   }) => {
     const offset = (page - 1) * limit;
 
@@ -69,8 +69,16 @@ const partnerPaymentModel = {
     const whereClause = conditions.join(" AND ");
 
     // Валідація полів сортування
-    const allowedSortFields = ["id", "amount", "status", "payment_date", "created_at"];
-    const validSortBy = allowedSortFields.includes(sortBy) ? sortBy : "created_at";
+    const allowedSortFields = [
+      "id",
+      "amount",
+      "status",
+      "payment_date",
+      "created_at",
+    ];
+    const validSortBy = allowedSortFields.includes(sortBy)
+      ? sortBy
+      : "created_at";
     const validSortOrder = sortOrder.toLowerCase() === "asc" ? "ASC" : "DESC";
 
     // Основний запит
@@ -179,13 +187,13 @@ const partnerPaymentModel = {
     const {
       payout_request_id,
       amount,
-      currency = 'USD',
+      currency = "USD",
       transaction_hash,
       network,
       wallet_address,
       notes,
       status,
-      created_by
+      created_by,
     } = paymentData;
 
     const query = `
@@ -198,8 +206,15 @@ const partnerPaymentModel = {
     `;
 
     const result = await db.query(query, [
-      payout_request_id, amount, currency, transaction_hash, network,
-      wallet_address, notes, status, created_by
+      payout_request_id,
+      amount,
+      currency,
+      transaction_hash,
+      network,
+      wallet_address,
+      notes,
+      status,
+      created_by,
     ]);
 
     return result.rows[0];
@@ -214,6 +229,7 @@ const partnerPaymentModel = {
   updatePayment: async (id, paymentData) => {
     const {
       amount,
+      status,
       currency,
       transaction_hash,
       network,
@@ -222,13 +238,17 @@ const partnerPaymentModel = {
       failure_reason,
       block_number,
       gas_used,
-      gas_price
+      gas_price,
     } = paymentData;
 
     const setClauses = [];
     const values = [];
     let paramIndex = 1;
 
+    if (status !== undefined) {
+      setClauses.push(`status = $${paramIndex++}`);
+      values.push(status);
+    }
     if (amount !== undefined) {
       setClauses.push(`amount = $${paramIndex++}`);
       values.push(amount);
@@ -296,7 +316,12 @@ const partnerPaymentModel = {
    * @param {Object} [additionalData] - Додаткові дані залежно від статусу
    * @returns {Promise<Object|null>} Оновлений платіж або null
    */
-  updatePaymentStatus: async (id, status, processedBy = null, additionalData = {}) => {
+  updatePaymentStatus: async (
+    id,
+    status,
+    processedBy = null,
+    additionalData = {}
+  ) => {
     const setClauses = ["status = $1", "updated_at = NOW()"];
     const values = [status];
     let paramIndex = 2;
@@ -309,10 +334,10 @@ const partnerPaymentModel = {
 
     // Логіка залежно від статусу
     switch (status) {
-      case 'processing':
+      case "processing":
         setClauses.push("payment_date = NOW()");
         break;
-      case 'completed':
+      case "completed":
         setClauses.push("confirmation_date = NOW()");
         if (additionalData.transaction_hash) {
           setClauses.push(`transaction_hash = $${paramIndex++}`);
@@ -323,13 +348,13 @@ const partnerPaymentModel = {
           values.push(additionalData.block_number);
         }
         break;
-      case 'failed':
+      case "failed":
         if (additionalData.failure_reason) {
           setClauses.push(`failure_reason = $${paramIndex++}`);
           values.push(additionalData.failure_reason);
         }
         break;
-      case 'hold':
+      case "hold":
         if (additionalData.notes) {
           setClauses.push(`notes = $${paramIndex++}`);
           values.push(additionalData.notes);
@@ -359,40 +384,43 @@ const partnerPaymentModel = {
     try {
       // Перевіряємо, чи можна видалити платіж
       const paymentCheck = await db.query(
-        'SELECT status FROM partner_payments WHERE id = $1',
+        "SELECT status FROM partner_payments WHERE id = $1",
         [id]
       );
 
       if (paymentCheck.rows.length === 0) {
         return {
           success: false,
-          message: "Платіж не знайдено"
+          message: "Платіж не знайдено",
         };
       }
 
       // Не дозволяємо видалення завершених платежів
-      if (['completed', 'processing'].includes(paymentCheck.rows[0].status)) {
+      if (["completed", "processing"].includes(paymentCheck.rows[0].status)) {
         return {
           success: false,
-          message: "Неможливо видалити платіж з таким статусом"
+          message: "Неможливо видалити платіж з таким статусом",
         };
       }
 
       const result = await db.query(
-        'DELETE FROM partner_payments WHERE id = $1 RETURNING id',
+        "DELETE FROM partner_payments WHERE id = $1 RETURNING id",
         [id]
       );
 
       return {
         success: result.rows.length > 0,
-        message: result.rows.length > 0 ? "Платіж успішно видалено" : "Платіж не знайдено"
+        message:
+          result.rows.length > 0
+            ? "Платіж успішно видалено"
+            : "Платіж не знайдено",
       };
     } catch (error) {
       console.error("Error deleting payment:", error);
       return {
         success: false,
         message: "Помилка при видаленні платежу",
-        error: error.message
+        error: error.message,
       };
     }
   },
@@ -433,11 +461,11 @@ const partnerPaymentModel = {
    * @returns {Promise<boolean>} true якщо існує, false якщо не існує
    */
   paymentExistsByHash: async (transactionHash, excludeId = null) => {
-    let query = 'SELECT id FROM partner_payments WHERE transaction_hash = $1';
+    let query = "SELECT id FROM partner_payments WHERE transaction_hash = $1";
     const params = [transactionHash];
 
     if (excludeId) {
-      query += ' AND id != $2';
+      query += " AND id != $2";
       params.push(excludeId);
     }
 

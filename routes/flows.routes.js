@@ -263,8 +263,8 @@ router.put(
     check("is_active", "is_active має бути булевим значенням")
       .optional()
       .isBoolean(),
-    check("start_date", "Недійсна дата початку").optional().isISO8601(),
-    check("stop_date", "Недійсна дата завершення").optional().isISO8601(),
+    // check("start_date", "Недійсна дата початку").optional().isISO8601(),
+    // check("stop_date", "Недійсна дата завершення").optional().isISO8601(),
     check("conditions", "Умови мають бути рядком").optional().isString(),
     check("description", "Опис має бути рядком").optional().isString(),
     check("notes", "Нотатки мають бути рядком").optional().isString(),
