@@ -142,16 +142,15 @@ const getDailyFlowsStats = async (req, res) => {
         : undefined,
       status: req.query.status,
       teamId: req.query.teamId ? parseInt(req.query.teamId) : undefined,
-      // ОНОВЛЕНО: фільтрація по користувачах з урахуванням ролей
       userId: (() => {
         if (req.user.role === "buyer") {
-          // Buyer бачить лише свою статистику
           return req.user.id;
         } else if (
           req.query.userId &&
-          ["admin", "bizdev", "teamlead"].includes(req.user.role)
+          ["admin", "bizdev", "teamlead", "affiliate_manager"].includes(
+            req.user.role
+          )
         ) {
-          // Інші ролі можуть фільтрувати по конкретному користувачу
           return parseInt(req.query.userId);
         }
         return undefined;
@@ -164,6 +163,7 @@ const getDailyFlowsStats = async (req, res) => {
       offset,
     };
 
+    console.log(req.user.role);
     console.log("Запит статистики потоків за день:", options);
 
     const result = await flowStatsModel.getDailyFlowsStats(options);
