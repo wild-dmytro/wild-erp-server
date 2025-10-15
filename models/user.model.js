@@ -308,7 +308,7 @@ const createUser = async ({
       department_id,
       table_id,
       email,
-      positio,
+      position,
       phone,
       sub_id,
       description
