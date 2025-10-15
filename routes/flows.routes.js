@@ -163,45 +163,45 @@ router.post(
       }),
 
     // Умовна валідація для SPEND потоків
-    check("spend_percentage_ranges")
-      .if(body("flow_type").equals("spend"))
-      .isArray({ min: 1 })
-      .withMessage("Для SPEND потоків необхідно вказати масив діапазонів"),
+    // check("spend_percentage_ranges")
+    //   .if(body("flow_type").equals("spend"))
+    //   .isArray({ min: 1 })
+    //   .withMessage("Для SPEND потоків необхідно вказати масив діапазонів"),
 
-    check("spend_percentage_ranges.*.min_percentage")
-      .if(body("flow_type").equals("spend"))
-      .isNumeric()
-      .withMessage("min_percentage має бути числом")
-      .custom((value) => {
-        if (value < 0) {
-          throw new Error("min_percentage не може бути від'ємним");
-        }
-        return true;
-      }),
+    // check("spend_percentage_ranges.*.min_percentage")
+    //   .if(body("flow_type").equals("spend"))
+    //   .isNumeric()
+    //   .withMessage("min_percentage має бути числом")
+    //   .custom((value) => {
+    //     if (value < 0) {
+    //       throw new Error("min_percentage не може бути від'ємним");
+    //     }
+    //     return true;
+    //   }),
 
-    check("spend_percentage_ranges.*.max_percentage")
-      .if(body("flow_type").equals("spend"))
-      .optional({ nullable: true })
-      .isNumeric()
-      .withMessage("max_percentage має бути числом або null"),
+    // check("spend_percentage_ranges.*.max_percentage")
+    //   .if(body("flow_type").equals("spend"))
+    //   .optional({ nullable: true })
+    //   .isNumeric()
+    //   .withMessage("max_percentage має бути числом або null"),
 
-    check("spend_percentage_ranges.*.spend_multiplier")
-      .if(body("flow_type").equals("spend"))
-      .isNumeric()
-      .withMessage(
-        "spend_multiplier має бути числом (множник, наприклад 1.0 для 100%)"
-      )
-      .custom((value) => {
-        if (value < 0) {
-          throw new Error("spend_multiplier не може бути від'ємним");
-        }
-        return true;
-      }),
+    // check("spend_percentage_ranges.*.spend_multiplier")
+    //   .if(body("flow_type").equals("spend"))
+    //   .isNumeric()
+    //   .withMessage(
+    //     "spend_multiplier має бути числом (множник, наприклад 1.0 для 100%)"
+    //   )
+    //   .custom((value) => {
+    //     if (value < 0) {
+    //       throw new Error("spend_multiplier не може бути від'ємним");
+    //     }
+    //     return true;
+    //   }),
 
-    check("spend_percentage_ranges.*.description")
-      .optional()
-      .if(body("flow_type").equals("spend"))
-      .isString(),
+    // check("spend_percentage_ranges.*.description")
+    //   .optional()
+    //   .if(body("flow_type").equals("spend"))
+    //   .isString(),
 
     // Інші поля (без змін)
     check("status", "Недійсний статус потоку")

@@ -468,8 +468,7 @@ const checkUserAccess = async (flow_id, user_id, user_role) => {
 };
 
 /**
- * ОНОВЛЕНО: Отримання статистики потоку з фільтрацією по користувачах
- * Додано нові метрики: OAS, RD, URD, CPD та розрахунок прибутку
+ * ОНОВЛЕНО: Отримання статистики потоку з новою логікою розрахунку прибутку для SPEND потоків
  */
 const getFlowStats = async (
   flow_id,
@@ -530,7 +529,7 @@ const getFlowStats = async (
 
   const whereClause = conditions.join(" AND ");
 
-  // ДОДАНО: Запит для отримання даних про потік (модель, метрики тощо)
+  // Запит для отримання даних про потік
   const flowQuery = `
     SELECT 
       flow_type,
@@ -542,7 +541,7 @@ const getFlowStats = async (
     WHERE id = $1
   `;
 
-  // Основний запит з додаванням нових метрик
+  // Основний запит
   const query = `
     SELECT 
       fs.*,
@@ -551,7 +550,7 @@ const getFlowStats = async (
       u.last_name,
       CONCAT(u.first_name, ' ', u.last_name) as user_full_name,
       
-      -- Існуючі метрики
+      -- Базові метрики
       CASE 
         WHEN fs.spend > 0 AND fs.deps > 0 AND fs.cpa > 0
         THEN ROUND(((fs.deps * fs.cpa - fs.spend) / fs.spend * 100)::numeric, 2)
@@ -568,34 +567,12 @@ const getFlowStats = async (
         ELSE 0 
       END as reg2dep,
       
-      -- ДОДАНО: Нові метрики
-      -- OAS - (deposit_amount / spend) * 100%
+      -- OAS - використовується для SPEND потоків
       CASE 
         WHEN fs.spend > 0 
         THEN ROUND((fs.deposit_amount::numeric / fs.spend * 100)::numeric, 2)
         ELSE 0 
-      END as oas,
-      
-      -- RD - (redep_count / deps) * 100%
-      CASE 
-        WHEN COALESCE(fs.verified_deps, fs.deps) > 0 
-        THEN ROUND((fs.redep_count::numeric / COALESCE(fs.verified_deps, fs.deps) * 100)::numeric, 2)
-        ELSE 0 
-      END as rd,
-      
-      -- URD - (unique_redep_count / deps) * 100%
-      CASE 
-        WHEN COALESCE(fs.verified_deps, fs.deps) > 0 
-        THEN ROUND((fs.unique_redep_count::numeric / COALESCE(fs.verified_deps, fs.deps) * 100)::numeric, 2)
-        ELSE 0 
-      END as urd,
-      
-      -- CPD - spend / deps
-      CASE 
-        WHEN COALESCE(fs.verified_deps, fs.deps) > 0 
-        THEN ROUND((fs.spend::numeric / COALESCE(fs.verified_deps, fs.deps))::numeric, 2)
-        ELSE 0 
-      END as cpd
+      END as oas
       
     FROM flow_stats fs
     JOIN users u ON fs.user_id = u.id
@@ -616,7 +593,7 @@ const getFlowStats = async (
     const result = await db.query(query, params);
     const statsData = result.rows;
 
-    // ДОДАНО: Розрахунок прибутку
+    // Розрахунок прибутку
     let statsWithProfit = [];
 
     if (flowData.flow_type === "cpa") {
@@ -631,46 +608,41 @@ const getFlowStats = async (
         };
       });
     } else if (flowData.flow_type === "spend") {
-      // SPEND модель: спочатку отримуємо унікальні комбінації місяць/рік
+      // SPEND модель: нова логіка розрахунку
+
+      // Отримуємо унікальні комбінації місяць/рік
       const uniquePeriods = [
         ...new Set(statsData.map((row) => `${row.year}-${row.month}`)),
       ];
 
-      // Розраховуємо KPI для кожного унікального періоду
-      const monthlyKpiCache = {};
+      // Розраховуємо множник для кожного унікального періоду
+      const periodMultiplierCache = {};
 
       for (const period of uniquePeriods) {
         const [year, month] = period.split("-");
-        const monthlyKpi = await calculateMonthlyKPI(
+        const multiplier = await calculateSpendMultiplier(
           flow_id,
-          flowData.kpi_metric,
           parseInt(month),
           parseInt(year),
+          flowData.kpi_target_value,
+          flowData.spend_percentage_ranges,
           user_id,
           user_role,
           requesting_user_id
         );
-        monthlyKpiCache[period] = monthlyKpi;
+        periodMultiplierCache[period] = multiplier;
       }
 
-      // Тепер розраховуємо прибуток для кожного рядка використовуючи кеш
+      // Застосовуємо множник до кожного рядка
       statsWithProfit = statsData.map((row) => {
         const periodKey = `${row.year}-${row.month}`;
-        const monthlyKpi = monthlyKpiCache[periodKey] || 0;
-
-        // Знаходимо відповідний spend_multiplier
-        const spendMultiplier = findSpendMultiplier(
-          monthlyKpi,
-          flowData.spend_percentage_ranges
-        );
-
-        const profit = row.spend * spendMultiplier;
+        const multiplier = periodMultiplierCache[periodKey] || 0;
+        const profit = row.spend * multiplier;
 
         return {
           ...row,
           profit: Math.round(profit * 100) / 100,
-          monthly_kpi: monthlyKpi, // Додатково включаємо KPI для інформації
-          spend_multiplier: spendMultiplier, // Додатково включаємо множник для інформації
+          spend_multiplier: multiplier, // Для інформації
         };
       });
     } else {
@@ -689,13 +661,19 @@ const getFlowStats = async (
 };
 
 /**
- * ДОДАНО: Функція для розрахунку місячної KPI метрики
+ * НОВА ФУНКЦІЯ: Розрахунок множника для SPEND потоків
+ * Логіка:
+ * 1. Агрегуємо весь spend та deposit_amount за період
+ * 2. Розраховуємо OAS для базового spend та для spend з кожним відсотком
+ * 3. Знаходимо найбільший відсоток, при якому OAS >= target
+ * 4. Повертаємо відповідний множник
  */
-const calculateMonthlyKPI = async (
+const calculateSpendMultiplier = async (
   flow_id,
-  kpi_metric,
   month,
   year,
+  kpi_target_value,
+  spend_percentage_ranges,
   user_id,
   user_role,
   requesting_user_id
@@ -709,7 +687,10 @@ const calculateMonthlyKPI = async (
     paramIndex++;
     conditions.push(`fs.user_id = $${paramIndex}`);
     params.push(requesting_user_id);
-  } else if (user_id && ["admin", "bizdev", "teamlead"].includes(user_role)) {
+  } else if (
+    user_id &&
+    ["admin", "bizdev", "teamlead", "affiliate_manager"].includes(user_role)
+  ) {
     paramIndex++;
     conditions.push(`fs.user_id = $${paramIndex}`);
     params.push(user_id);
@@ -717,118 +698,213 @@ const calculateMonthlyKPI = async (
 
   const whereClause = conditions.join(" AND ");
 
-  let metricQuery = "";
+  // Агрегуємо spend та deposit_amount за період
+  const aggregateQuery = `
+    SELECT 
+      COALESCE(SUM(fs.spend), 0) as total_spend,
+      COALESCE(SUM(fs.deposit_amount), 0) as total_deposit_amount
+    FROM flow_stats fs
+    WHERE ${whereClause}
+  `;
 
-  switch (kpi_metric) {
-    case "OAS":
-      metricQuery = `
-        SELECT 
-          CASE 
-            WHEN SUM(fs.spend) > 0 
-            THEN ROUND((SUM(fs.deposit_amount)::numeric / SUM(fs.spend) * 100)::numeric, 2)
-            ELSE 0 
-          END as monthly_metric
-        FROM flow_stats fs
-        WHERE ${whereClause}
-      `;
-      break;
+  try {
+    const result = await db.query(aggregateQuery, params);
+    const { total_spend, total_deposit_amount } = result.rows[0];
 
-    case "RD":
-      metricQuery = `
-        SELECT 
-          CASE 
-            WHEN SUM(COALESCE(fs.verified_deps, fs.deps)) > 0 
-            THEN ROUND((SUM(fs.redep_count)::numeric / SUM(COALESCE(fs.verified_deps, fs.deps)) * 100)::numeric, 2)
-            ELSE 0 
-          END as monthly_metric
-        FROM flow_stats fs
-        WHERE ${whereClause}
-      `;
-      break;
-
-    case "URD":
-      metricQuery = `
-        SELECT 
-          CASE 
-            WHEN SUM(COALESCE(fs.verified_deps, fs.deps)) > 0 
-            THEN ROUND((SUM(fs.unique_redep_count)::numeric / SUM(COALESCE(fs.verified_deps, fs.deps)) * 100)::numeric, 2)
-            ELSE 0 
-          END as monthly_metric
-        FROM flow_stats fs
-        WHERE ${whereClause}
-      `;
-      break;
-
-    case "CPD":
-      metricQuery = `
-        SELECT 
-          CASE 
-            WHEN SUM(COALESCE(fs.verified_deps, fs.deps)) > 0 
-            THEN ROUND((SUM(fs.spend)::numeric / SUM(COALESCE(fs.verified_deps, fs.deps)))::numeric, 2)
-            ELSE 0 
-          END as monthly_metric
-        FROM flow_stats fs
-        WHERE ${whereClause}
-      `;
-      break;
-
-    default:
+    // Якщо немає spend, повертаємо 0
+    if (total_spend <= 0) {
       return 0;
-  }
+    }
 
-  try {
-    const result = await db.query(metricQuery, params);
-    return result.rows[0]?.monthly_metric || 0;
-  } catch (error) {
-    console.error(`Помилка при розрахунку ${kpi_metric}:`, error);
-    return 0;
-  }
-};
+    // Парсимо spend_percentage_ranges
+    let percentages = [];
+    try {
+      percentages =
+        typeof spend_percentage_ranges === "string"
+          ? JSON.parse(spend_percentage_ranges)
+          : spend_percentage_ranges || [];
+    } catch (error) {
+      console.error("Помилка при парсингу spend_percentage_ranges:", error);
+      return 0;
+    }
 
-/**
- * ДОДАНО: Функція для знаходження spend_multiplier за значенням метрики
- */
-const findSpendMultiplier = (metricValue, spendPercentageRanges) => {
-  if (!spendPercentageRanges || !Array.isArray(spendPercentageRanges)) {
-    return 0;
-  }
+    // Перетворюємо відсотки в числа та сортуємо від більшого до меншого
+    const sortedPercentages = percentages
+      .map((p) => parseFloat(p))
+      .filter((p) => !isNaN(p))
+      .sort((a, b) => b - a);
 
-  try {
-    // Якщо це рядок JSON, парсимо його
-    const ranges =
-      typeof spendPercentageRanges === "string"
-        ? JSON.parse(spendPercentageRanges)
-        : spendPercentageRanges;
+    // Розраховуємо OAS для базового spend
+    const baseOAS = (total_deposit_amount / total_spend) * 100;
 
-    // Сортуємо діапазони за min_percentage для правильного пошуку
-    const sortedRanges = ranges.sort(
-      (a, b) => a.min_percentage - b.min_percentage
-    );
+    // Перевіряємо базовий OAS
+    if (baseOAS < kpi_target_value) {
+      // Базовий OAS не проходить - профіт = 0
+      return 0;
+    }
 
-    for (const range of sortedRanges) {
-      const minPercentage = range.min_percentage || 0;
-      const maxPercentage = range.max_percentage;
+    // Перевіряємо кожен відсоток від більшого до меншого
+    for (const percentage of sortedPercentages) {
+      const multiplier = 1 + percentage / 100;
+      const adjustedSpend = total_spend * multiplier;
+      const adjustedOAS = (total_deposit_amount / adjustedSpend) * 100;
 
-      // Якщо max_percentage не вказано (null/undefined), це означає "від min_percentage і вище"
-      if (maxPercentage === null || maxPercentage === undefined) {
-        if (metricValue >= minPercentage) {
-          return range.spend_multiplier || 0;
-        }
-      } else {
-        // Звичайний діапазон з min та max
-        if (metricValue >= minPercentage && metricValue <= maxPercentage) {
-          return range.spend_multiplier || 0;
-        }
+      if (adjustedOAS >= kpi_target_value) {
+        // Знайшли найбільший підходящий відсоток
+        return multiplier;
       }
     }
 
-    // Якщо не знайдено відповідного діапазону, повертаємо 0
-    return 0;
+    // Якщо жоден відсоток не підійшов, але базовий OAS >= target
+    // Повертаємо множник 1 (просто повернути spend)
+    return 1;
   } catch (error) {
-    console.error("Помилка при парсингу spend_percentage_ranges:", error);
+    console.error("Помилка при розрахунку spend multiplier:", error);
     return 0;
   }
 };
+
+// /**
+//  * ДОДАНО: Функція для розрахунку місячної KPI метрики
+//  */
+// const calculateMonthlyKPI = async (
+//   flow_id,
+//   kpi_metric,
+//   month,
+//   year,
+//   user_id,
+//   user_role,
+//   requesting_user_id
+// ) => {
+//   let conditions = ["fs.flow_id = $1", "fs.month = $2", "fs.year = $3"];
+//   let params = [flow_id, month, year];
+//   let paramIndex = 3;
+
+//   // Застосовуємо ту ж логіку фільтрації користувачів
+//   if (user_role === "buyer") {
+//     paramIndex++;
+//     conditions.push(`fs.user_id = $${paramIndex}`);
+//     params.push(requesting_user_id);
+//   } else if (user_id && ["admin", "bizdev", "teamlead"].includes(user_role)) {
+//     paramIndex++;
+//     conditions.push(`fs.user_id = $${paramIndex}`);
+//     params.push(user_id);
+//   }
+
+//   const whereClause = conditions.join(" AND ");
+
+//   let metricQuery = "";
+
+//   switch (kpi_metric) {
+//     case "OAS":
+//       metricQuery = `
+//         SELECT
+//           CASE
+//             WHEN SUM(fs.spend) > 0
+//             THEN ROUND((SUM(fs.deposit_amount)::numeric / SUM(fs.spend) * 100)::numeric, 2)
+//             ELSE 0
+//           END as monthly_metric
+//         FROM flow_stats fs
+//         WHERE ${whereClause}
+//       `;
+//       break;
+
+//     case "RD":
+//       metricQuery = `
+//         SELECT
+//           CASE
+//             WHEN SUM(COALESCE(fs.verified_deps, fs.deps)) > 0
+//             THEN ROUND((SUM(fs.redep_count)::numeric / SUM(COALESCE(fs.verified_deps, fs.deps)) * 100)::numeric, 2)
+//             ELSE 0
+//           END as monthly_metric
+//         FROM flow_stats fs
+//         WHERE ${whereClause}
+//       `;
+//       break;
+
+//     case "URD":
+//       metricQuery = `
+//         SELECT
+//           CASE
+//             WHEN SUM(COALESCE(fs.verified_deps, fs.deps)) > 0
+//             THEN ROUND((SUM(fs.unique_redep_count)::numeric / SUM(COALESCE(fs.verified_deps, fs.deps)) * 100)::numeric, 2)
+//             ELSE 0
+//           END as monthly_metric
+//         FROM flow_stats fs
+//         WHERE ${whereClause}
+//       `;
+//       break;
+
+//     case "CPD":
+//       metricQuery = `
+//         SELECT
+//           CASE
+//             WHEN SUM(COALESCE(fs.verified_deps, fs.deps)) > 0
+//             THEN ROUND((SUM(fs.spend)::numeric / SUM(COALESCE(fs.verified_deps, fs.deps)))::numeric, 2)
+//             ELSE 0
+//           END as monthly_metric
+//         FROM flow_stats fs
+//         WHERE ${whereClause}
+//       `;
+//       break;
+
+//     default:
+//       return 0;
+//   }
+
+//   try {
+//     const result = await db.query(metricQuery, params);
+//     return result.rows[0]?.monthly_metric || 0;
+//   } catch (error) {
+//     console.error(`Помилка при розрахунку ${kpi_metric}:`, error);
+//     return 0;
+//   }
+// };
+
+// /**
+//  * ДОДАНО: Функція для знаходження spend_multiplier за значенням метрики
+//  */
+// const findSpendMultiplier = (metricValue, spendPercentageRanges) => {
+//   if (!spendPercentageRanges || !Array.isArray(spendPercentageRanges)) {
+//     return 0;
+//   }
+
+//   try {
+//     // Якщо це рядок JSON, парсимо його
+//     const ranges =
+//       typeof spendPercentageRanges === "string"
+//         ? JSON.parse(spendPercentageRanges)
+//         : spendPercentageRanges;
+
+//     // Сортуємо діапазони за min_percentage для правильного пошуку
+//     const sortedRanges = ranges.sort(
+//       (a, b) => a.min_percentage - b.min_percentage
+//     );
+
+//     for (const range of sortedRanges) {
+//       const minPercentage = range.min_percentage || 0;
+//       const maxPercentage = range.max_percentage;
+
+//       // Якщо max_percentage не вказано (null/undefined), це означає "від min_percentage і вище"
+//       if (maxPercentage === null || maxPercentage === undefined) {
+//         if (metricValue >= minPercentage) {
+//           return range.spend_multiplier || 0;
+//         }
+//       } else {
+//         // Звичайний діапазон з min та max
+//         if (metricValue >= minPercentage && metricValue <= maxPercentage) {
+//           return range.spend_multiplier || 0;
+//         }
+//       }
+//     }
+
+//     // Якщо не знайдено відповідного діапазону, повертаємо 0
+//     return 0;
+//   } catch (error) {
+//     console.error("Помилка при парсингу spend_percentage_ranges:", error);
+//     return 0;
+//   }
+// };
 
 /**
  * Видалення статистики за день (ОНОВЛЕНО з урахуванням user_id)
@@ -849,8 +925,7 @@ const deleteFlowStat = async (flow_id, user_id, day, month, year) => {
 };
 
 /**
- * ОНОВЛЕНО: Отримання статистики користувача за місяць по днях з урахуванням user_id
- * ДОДАНО: нові метрики OAS, RD, URD, CPD та розрахунок прибутку за кожен день
+ * ОНОВЛЕНО: Отримання статистики користувача за місяць по днях з новою логікою прибутку
  * @param {number} userId - ID користувача
  * @param {Object} options - Опції фільтрації
  * @param {number} options.month - Місяць (1-12)
@@ -880,7 +955,7 @@ const getUserMonthlyStats = async (
     // Отримуємо кількість днів у місяці
     const daysInMonth = new Date(year, month, 0).getDate();
 
-    // ОНОВЛЕНО: Основний запит з урахуванням user_id в flow_stats та новими метриками
+    // Основний запит з денними даними
     const dailyStatsQuery = `
       WITH days_series AS (
         SELECT generate_series(1, $3) as day
@@ -905,7 +980,7 @@ const getUserMonthlyStats = async (
           COALESCE(AVG(fs.cpa), 0) as avg_cpa,
           COUNT(fs.id) as flows_with_stats,
           COUNT(DISTINCT fs.flow_id) as active_flows_count,
-          -- ДОДАНО: Збираємо дані для розрахунку прибутку за день
+          -- Збираємо дані для розрахунку прибутку за день
           array_agg(
             json_build_object(
               'flow_id', fs.flow_id,
@@ -937,7 +1012,7 @@ const getUserMonthlyStats = async (
         flows_with_stats,
         active_flows_count,
         daily_flow_stats,
-        -- Існуючі обчислювальні поля
+        -- Базові метрики
         CASE 
           WHEN total_spend > 0 AND total_deps > 0 AND avg_cpa > 0
           THEN ROUND(((total_deps * avg_cpa - total_spend) / total_spend * 100)::numeric, 2)
@@ -958,26 +1033,23 @@ const getUserMonthlyStats = async (
           THEN ROUND((total_verified_deps::numeric / total_deps * 100)::numeric, 2)
           ELSE 0 
         END as verification_rate,
-        -- ДОДАНО: Нові метрики
-        -- OAS - (deposit_amount / spend) * 100%
+        -- OAS - для всіх типів потоків
         CASE 
           WHEN total_spend > 0 
           THEN ROUND((total_deposit_amount::numeric / total_spend * 100)::numeric, 2)
           ELSE 0 
         END as oas,
-        -- RD - (redep_count / deps) * 100%
+        -- RD, URD, CPD - для CPA потоків
         CASE 
           WHEN COALESCE(total_verified_deps, total_deps) > 0 
           THEN ROUND((total_redep_count::numeric / COALESCE(total_verified_deps, total_deps) * 100)::numeric, 2)
           ELSE 0 
         END as rd,
-        -- URD - (unique_redep_count / deps) * 100%
         CASE 
           WHEN COALESCE(total_verified_deps, total_deps) > 0 
           THEN ROUND((total_unique_redep_count::numeric / COALESCE(total_verified_deps, total_deps) * 100)::numeric, 2)
           ELSE 0 
         END as urd,
-        -- CPD - spend / deps
         CASE 
           WHEN COALESCE(total_verified_deps, total_deps) > 0 
           THEN ROUND((total_spend::numeric / COALESCE(total_verified_deps, total_deps))::numeric, 2)
@@ -994,7 +1066,7 @@ const getUserMonthlyStats = async (
       year,
     ]);
 
-    // ДОДАНО: Отримуємо дані про всі активні потоки користувача для розрахунку прибутку
+    // Отримуємо дані про всі активні потоки користувача
     const activeFlowsQuery = `
       SELECT 
         f.id,
@@ -1017,30 +1089,25 @@ const getUserMonthlyStats = async (
       flowsMap[flow.id] = flow;
     });
 
-    // ДОДАНО: Розрахунок KPI для spend потоків (робимо один раз для всього місяця)
+    // ОНОВЛЕНО: Розрахунок множників для SPEND потоків (використовуємо новий метод)
     const spendFlows = activeFlows.filter((f) => f.flow_type === "spend");
-    const monthlyKpiCache = {};
+    const spendMultiplierCache = {};
 
     for (const flow of spendFlows) {
-      const monthlyKpi = await calculateMonthlyKPI(
+      const multiplier = await calculateSpendMultiplier(
         flow.id,
-        flow.kpi_metric,
         month,
         year,
+        flow.kpi_target_value,
+        flow.spend_percentage_ranges,
         userId, // фільтруємо по конкретному користувачу
         user_role,
         requesting_user_id
       );
-      monthlyKpiCache[flow.id] = {
-        kpi: monthlyKpi,
-        multiplier: findSpendMultiplier(
-          monthlyKpi,
-          flow.spend_percentage_ranges
-        ),
-      };
+      spendMultiplierCache[flow.id] = multiplier;
     }
 
-    // ОНОВЛЕНО: Загальна статистика за місяць з новими полями
+    // Загальна статистика за місяць
     const summaryQuery = `
       SELECT 
         COUNT(DISTINCT f.id) as total_user_flows,
@@ -1090,7 +1157,7 @@ const getUserMonthlyStats = async (
     const summaryResult = await db.query(summaryQuery, [userId, month, year]);
     const summary = summaryResult.rows[0];
 
-    // ДОДАНО: Функція для розрахунку денного прибутку
+    // ОНОВЛЕНО: Функція для розрахунку денного прибутку (використовуємо кеш множників)
     const calculateDayProfit = (dailyFlowStats) => {
       if (!dailyFlowStats || dailyFlowStats.length === 0) {
         return 0;
@@ -1113,17 +1180,15 @@ const getUserMonthlyStats = async (
           dayProfit += depsForCalculation * cpa;
         } else if (flow.flow_type === "spend") {
           // SPEND модель: використовуємо закешований multiplier
-          const cached = monthlyKpiCache[flow.id];
-          if (cached) {
-            dayProfit += (flowStat.spend || 0) * cached.multiplier;
-          }
+          const multiplier = spendMultiplierCache[flow.id] || 0;
+          dayProfit += (flowStat.spend || 0) * multiplier;
         }
       });
 
       return Math.round(dayProfit * 100) / 100;
     };
 
-    // Форматуємо результат з новими полями, метриками та денним прибутком
+    // Форматуємо результат з денним прибутком
     const dailyStats = dailyResult.rows.map((row) => {
       const dayProfit = calculateDayProfit(row.daily_flow_stats);
 
@@ -1142,23 +1207,21 @@ const getUserMonthlyStats = async (
           redep_count: parseInt(row.total_redep_count) || 0,
           unique_redep_count: parseInt(row.total_unique_redep_count) || 0,
           avg_cpa: parseFloat(row.avg_cpa) || 0,
-          // ДОДАНО: Денний прибуток
           profit: dayProfit,
         },
         calculated: {
-          // Існуючі метрики (ROI тепер через денний прибуток)
           roi:
             parseFloat(row.total_spend) > 0
               ? Math.round(
-                  (dayProfit / parseFloat(row.total_spend)) * 100 * 100
-                ) /
-                  100 -
-                100
+                  ((dayProfit - parseFloat(row.total_spend)) /
+                    parseFloat(row.total_spend)) *
+                    100 *
+                    100
+                ) / 100
               : 0,
           inst2reg: parseFloat(row.inst2reg) || 0,
           reg2dep: parseFloat(row.reg2dep) || 0,
           verification_rate: parseFloat(row.verification_rate) || 0,
-          // ДОДАНО: Нові метрики
           oas: parseFloat(row.oas) || 0,
           rd: parseFloat(row.rd) || 0,
           urd: parseFloat(row.urd) || 0,
@@ -1172,7 +1235,7 @@ const getUserMonthlyStats = async (
       };
     });
 
-    // Обчислюємо загальні метрики з новими полями та загальним прибутком
+    // Обчислюємо загальні метрики
     const totalProfit = dailyStats.reduce(
       (sum, day) => sum + day.metrics.profit,
       0
@@ -1188,25 +1251,23 @@ const getUserMonthlyStats = async (
       redep_count: parseInt(summary.total_redep_count) || 0,
       unique_redep_count: parseInt(summary.total_unique_redep_count) || 0,
       avg_cpa: parseFloat(summary.avg_cpa) || 0,
-      // ДОДАНО: Загальний прибуток
       total_profit: Math.round(totalProfit * 100) / 100,
     };
 
-    // Використовуємо verified_deps або deps для розрахунків
     const depsForCalculation =
       totalMetrics.verified_deps > 0
         ? totalMetrics.verified_deps
         : totalMetrics.deps;
 
     const totalCalculated = {
-      // Існуючі метрики (ROI тепер через прибуток)
       roi:
         totalMetrics.spend > 0
           ? Math.round(
-              (totalMetrics.total_profit / totalMetrics.spend) * 100 * 100
-            ) /
-              100 -
-            100
+              ((totalMetrics.total_profit - totalMetrics.spend) /
+                totalMetrics.spend) *
+                100 *
+                100
+            ) / 100
           : 0,
       inst2reg:
         totalMetrics.installs > 0
@@ -1225,7 +1286,6 @@ const getUserMonthlyStats = async (
               (totalMetrics.verified_deps / totalMetrics.deps) * 100 * 100
             ) / 100
           : 0,
-      // ДОДАНО: Нові загальні метрики
       oas:
         totalMetrics.spend > 0
           ? Math.round(
@@ -1269,7 +1329,6 @@ const getUserMonthlyStats = async (
           .length,
         avg_daily_spend: totalMetrics.spend / daysInMonth,
         avg_daily_deps: totalMetrics.deps / daysInMonth,
-        // ДОДАНО: Середній денний прибуток
         avg_daily_profit: totalMetrics.total_profit / daysInMonth,
       },
     };
@@ -1282,8 +1341,7 @@ const getUserMonthlyStats = async (
 };
 
 /**
- * ОНОВЛЕНО: Отримання статистики команди за місяць по днях з урахуванням user_id
- * ДОДАНО: нові метрики OAS, RD, URD, CPD та розрахунок прибутку за кожен день
+ * ОНОВЛЕНО: Отримання статистики команди за місяць по днях з новою логікою прибутку
  * @param {number} teamId - ID команди
  * @param {Object} options - Опції фільтрації
  * @param {number} options.month - Місяць (1-12)
@@ -1313,7 +1371,7 @@ const getTeamMonthlyStats = async (
     // Отримуємо кількість днів у місяці
     const daysInMonth = new Date(year, month, 0).getDate();
 
-    // ОНОВЛЕНО: Основний запит з урахуванням user_id в flow_stats та новими метриками
+    // Основний запит з денними даними
     const dailyStatsQuery = `
       WITH days_series AS (
         SELECT generate_series(1, $3) as day
@@ -1338,7 +1396,7 @@ const getTeamMonthlyStats = async (
           COUNT(fs.id) as flows_with_stats,
           COUNT(DISTINCT fs.flow_id) as active_flows_count,
           COUNT(DISTINCT fs.user_id) as active_users_count,
-          -- ДОДАНО: Збираємо дані для розрахунку прибутку за день
+          -- Збираємо дані для розрахунку прибутку за день
           array_agg(
             json_build_object(
               'flow_id', fs.flow_id,
@@ -1371,7 +1429,7 @@ const getTeamMonthlyStats = async (
         active_flows_count,
         active_users_count,
         daily_flow_stats,
-        -- Існуючі обчислювальні поля
+        -- Базові метрики
         CASE 
           WHEN total_spend > 0 AND total_deps > 0 AND avg_cpa > 0
           THEN ROUND(((total_deps * avg_cpa - total_spend) / total_spend * 100)::numeric, 2)
@@ -1392,26 +1450,23 @@ const getTeamMonthlyStats = async (
           THEN ROUND((total_verified_deps::numeric / total_deps * 100)::numeric, 2)
           ELSE 0 
         END as verification_rate,
-        -- ДОДАНО: Нові метрики
-        -- OAS - (deposit_amount / spend) * 100%
+        -- OAS - для всіх типів потоків
         CASE 
           WHEN total_spend > 0 
           THEN ROUND((total_deposit_amount::numeric / total_spend * 100)::numeric, 2)
           ELSE 0 
         END as oas,
-        -- RD - (redep_count / deps) * 100%
+        -- RD, URD, CPD - для CPA потоків
         CASE 
           WHEN COALESCE(total_verified_deps, total_deps) > 0 
           THEN ROUND((total_redep_count::numeric / COALESCE(total_verified_deps, total_deps) * 100)::numeric, 2)
           ELSE 0 
         END as rd,
-        -- URD - (unique_redep_count / deps) * 100%
         CASE 
           WHEN COALESCE(total_verified_deps, total_deps) > 0 
           THEN ROUND((total_unique_redep_count::numeric / COALESCE(total_verified_deps, total_deps) * 100)::numeric, 2)
           ELSE 0 
         END as urd,
-        -- CPD - spend / deps
         CASE 
           WHEN COALESCE(total_verified_deps, total_deps) > 0 
           THEN ROUND((total_spend::numeric / COALESCE(total_verified_deps, total_deps))::numeric, 2)
@@ -1428,7 +1483,7 @@ const getTeamMonthlyStats = async (
       year,
     ]);
 
-    // ДОДАНО: Отримуємо дані про всі потоки команди для розрахунку прибутку
+    // Отримуємо дані про всі потоки команди
     const teamFlowsQuery = `
       SELECT 
         f.id,
@@ -1450,30 +1505,25 @@ const getTeamMonthlyStats = async (
       flowsMap[flow.id] = flow;
     });
 
-    // ДОДАНО: Розрахунок KPI для spend потоків (робимо один раз для всього місяця)
+    // ОНОВЛЕНО: Розрахунок множників для SPEND потоків (використовуємо новий метод)
     const spendFlows = teamFlows.filter((f) => f.flow_type === "spend");
-    const monthlyKpiCache = {};
+    const spendMultiplierCache = {};
 
     for (const flow of spendFlows) {
-      const monthlyKpi = await calculateMonthlyKPI(
+      const multiplier = await calculateSpendMultiplier(
         flow.id,
-        flow.kpi_metric,
         month,
         year,
+        flow.kpi_target_value,
+        flow.spend_percentage_ranges,
         undefined, // не фільтруємо по користувачу для команди
         user_role,
         requesting_user_id
       );
-      monthlyKpiCache[flow.id] = {
-        kpi: monthlyKpi,
-        multiplier: findSpendMultiplier(
-          monthlyKpi,
-          flow.spend_percentage_ranges
-        ),
-      };
+      spendMultiplierCache[flow.id] = multiplier;
     }
 
-    // ОНОВЛЕНО: Загальна статистика за місяць з новими полями
+    // Загальна статистика за місяць
     const summaryQuery = `
       SELECT 
         t.name as team_name,
@@ -1534,7 +1584,7 @@ const getTeamMonthlyStats = async (
       throw new Error("Команду не знайдено");
     }
 
-    // ДОДАНО: Функція для розрахунку денного прибутку
+    // ОНОВЛЕНО: Функція для розрахунку денного прибутку (використовуємо кеш множників)
     const calculateDayProfit = (dailyFlowStats) => {
       if (!dailyFlowStats || dailyFlowStats.length === 0) {
         return 0;
@@ -1557,17 +1607,15 @@ const getTeamMonthlyStats = async (
           dayProfit += depsForCalculation * cpa;
         } else if (flow.flow_type === "spend") {
           // SPEND модель: використовуємо закешований multiplier
-          const cached = monthlyKpiCache[flow.id];
-          if (cached) {
-            dayProfit += (flowStat.spend || 0) * cached.multiplier;
-          }
+          const multiplier = spendMultiplierCache[flow.id] || 0;
+          dayProfit += (flowStat.spend || 0) * multiplier;
         }
       });
 
       return Math.round(dayProfit * 100) / 100;
     };
 
-    // ОНОВЛЕНО: Отримуємо топ користувачів команди за місяць з новими метриками
+    // ОНОВЛЕНО: Отримуємо топ користувачів команди
     const topUsersQuery = `
       SELECT 
         u.id as user_id,
@@ -1586,7 +1634,6 @@ const getTeamMonthlyStats = async (
           THEN ROUND(((SUM(fs.deps) * AVG(fs.cpa) - SUM(fs.spend)) / SUM(fs.spend) * 100)::numeric, 2)
           ELSE 0 
         END as roi,
-        -- ДОДАНО: Нові метрики
         CASE 
           WHEN SUM(fs.spend) > 0 
           THEN ROUND((SUM(fs.deposit_amount)::numeric / SUM(fs.spend) * 100)::numeric, 2)
@@ -1619,57 +1666,7 @@ const getTeamMonthlyStats = async (
 
     const topUsersResult = await db.query(topUsersQuery, [teamId, month, year]);
 
-    // Форматуємо результат з новими полями, метриками та денним прибутком
-    const dailyStats = dailyResult.rows.map((row) => {
-      const dayProfit = calculateDayProfit(row.daily_flow_stats);
-
-      return {
-        day: parseInt(row.day),
-        date: `${year}-${String(month).padStart(2, "0")}-${String(
-          row.day
-        ).padStart(2, "0")}`,
-        metrics: {
-          spend: parseFloat(row.total_spend) || 0,
-          installs: parseInt(row.total_installs) || 0,
-          regs: parseInt(row.total_regs) || 0,
-          deps: parseInt(row.total_deps) || 0,
-          verified_deps: parseInt(row.total_verified_deps) || 0,
-          deposit_amount: parseFloat(row.total_deposit_amount) || 0,
-          redep_count: parseInt(row.total_redep_count) || 0,
-          unique_redep_count: parseInt(row.total_unique_redep_count) || 0,
-          avg_cpa: parseFloat(row.avg_cpa) || 0,
-          // ДОДАНО: Денний прибуток
-          profit: dayProfit,
-        },
-        calculated: {
-          // Існуючі метрики (ROI тепер через денний прибуток)
-          roi:
-            parseFloat(row.total_spend) > 0
-              ? Math.round(
-                  (dayProfit / parseFloat(row.total_spend)) * 100 * 100
-                ) /
-                  100 -
-                100
-              : 0,
-          inst2reg: parseFloat(row.inst2reg) || 0,
-          reg2dep: parseFloat(row.reg2dep) || 0,
-          verification_rate: parseFloat(row.verification_rate) || 0,
-          // ДОДАНО: Нові метрики
-          oas: parseFloat(row.oas) || 0,
-          rd: parseFloat(row.rd) || 0,
-          urd: parseFloat(row.urd) || 0,
-          cpd: parseFloat(row.cpd) || 0,
-        },
-        meta: {
-          flows_with_stats: parseInt(row.flows_with_stats) || 0,
-          active_flows_count: parseInt(row.active_flows_count) || 0,
-          active_users_count: parseInt(row.active_users_count) || 0,
-          has_activity: parseInt(row.flows_with_stats) > 0,
-        },
-      };
-    });
-
-    // ДОДАНО: Розрахунок прибутку для топ користувачів
+    // ОНОВЛЕНО: Розрахунок прибутку для топ користувачів
     const topUsersWithProfit = await Promise.all(
       topUsersResult.rows.map(async (user) => {
         let userProfit = 0;
@@ -1709,10 +1706,8 @@ const getTeamMonthlyStats = async (
             const cpa = flowData.avg_cpa || flow.cpa || 0;
             userProfit += depsForCalculation * cpa;
           } else if (flow.flow_type === "spend") {
-            const cached = monthlyKpiCache[flow.id];
-            if (cached) {
-              userProfit += (flowData.total_spend || 0) * cached.multiplier;
-            }
+            const multiplier = spendMultiplierCache[flow.id] || 0;
+            userProfit += (flowData.total_spend || 0) * multiplier;
           }
         }
 
@@ -1730,21 +1725,19 @@ const getTeamMonthlyStats = async (
             deposit_amount: parseFloat(user.total_deposit_amount) || 0,
             redep_count: parseInt(user.total_redep_count) || 0,
             unique_redep_count: parseInt(user.total_unique_redep_count) || 0,
-            // Існуючі метрики (ROI тепер через прибуток)
             roi:
               parseFloat(user.total_spend) > 0
                 ? Math.round(
-                    (userProfit / parseFloat(user.total_spend)) * 100 * 100
-                  ) /
-                    100 -
-                  100
+                    ((userProfit - parseFloat(user.total_spend)) /
+                      parseFloat(user.total_spend)) *
+                      100 *
+                      100
+                  ) / 100
                 : 0,
-            // ДОДАНО: Нові метрики
             oas: parseFloat(user.oas) || 0,
             rd: parseFloat(user.rd) || 0,
             urd: parseFloat(user.urd) || 0,
             cpd: parseFloat(user.cpd) || 0,
-            // ДОДАНО: Прибуток користувача
             profit: Math.round(userProfit * 100) / 100,
           },
           active_flows: parseInt(user.active_flows) || 0,
@@ -1752,7 +1745,55 @@ const getTeamMonthlyStats = async (
       })
     );
 
-    // Обчислюємо загальні метрики з новими полями та загальним прибутком
+    // Форматуємо результат з денним прибутком
+    const dailyStats = dailyResult.rows.map((row) => {
+      const dayProfit = calculateDayProfit(row.daily_flow_stats);
+
+      return {
+        day: parseInt(row.day),
+        date: `${year}-${String(month).padStart(2, "0")}-${String(
+          row.day
+        ).padStart(2, "0")}`,
+        metrics: {
+          spend: parseFloat(row.total_spend) || 0,
+          installs: parseInt(row.total_installs) || 0,
+          regs: parseInt(row.total_regs) || 0,
+          deps: parseInt(row.total_deps) || 0,
+          verified_deps: parseInt(row.total_verified_deps) || 0,
+          deposit_amount: parseFloat(row.total_deposit_amount) || 0,
+          redep_count: parseInt(row.total_redep_count) || 0,
+          unique_redep_count: parseInt(row.total_unique_redep_count) || 0,
+          avg_cpa: parseFloat(row.avg_cpa) || 0,
+          profit: dayProfit,
+        },
+        calculated: {
+          roi:
+            parseFloat(row.total_spend) > 0
+              ? Math.round(
+                  ((dayProfit - parseFloat(row.total_spend)) /
+                    parseFloat(row.total_spend)) *
+                    100 *
+                    100
+                ) / 100
+              : 0,
+          inst2reg: parseFloat(row.inst2reg) || 0,
+          reg2dep: parseFloat(row.reg2dep) || 0,
+          verification_rate: parseFloat(row.verification_rate) || 0,
+          oas: parseFloat(row.oas) || 0,
+          rd: parseFloat(row.rd) || 0,
+          urd: parseFloat(row.urd) || 0,
+          cpd: parseFloat(row.cpd) || 0,
+        },
+        meta: {
+          flows_with_stats: parseInt(row.flows_with_stats) || 0,
+          active_flows_count: parseInt(row.active_flows_count) || 0,
+          active_users_count: parseInt(row.active_users_count) || 0,
+          has_activity: parseInt(row.flows_with_stats) > 0,
+        },
+      };
+    });
+
+    // Обчислюємо загальні метрики
     const totalProfit = dailyStats.reduce(
       (sum, day) => sum + day.metrics.profit,
       0
@@ -1768,25 +1809,23 @@ const getTeamMonthlyStats = async (
       redep_count: parseInt(summary.total_redep_count) || 0,
       unique_redep_count: parseInt(summary.total_unique_redep_count) || 0,
       avg_cpa: parseFloat(summary.avg_cpa) || 0,
-      // ДОДАНО: Загальний прибуток
       total_profit: Math.round(totalProfit * 100) / 100,
     };
 
-    // Використовуємо verified_deps або deps для розрахунків
     const depsForCalculation =
       totalMetrics.verified_deps > 0
         ? totalMetrics.verified_deps
         : totalMetrics.deps;
 
     const totalCalculated = {
-      // Існуючі метрики (ROI тепер через прибуток)
       roi:
         totalMetrics.spend > 0
           ? Math.round(
-              (totalMetrics.total_profit / totalMetrics.spend) * 100 * 100
-            ) /
-              100 -
-            100
+              ((totalMetrics.total_profit - totalMetrics.spend) /
+                totalMetrics.spend) *
+                100 *
+                100
+            ) / 100
           : 0,
       inst2reg:
         totalMetrics.installs > 0
@@ -1805,7 +1844,6 @@ const getTeamMonthlyStats = async (
               (totalMetrics.verified_deps / totalMetrics.deps) * 100 * 100
             ) / 100
           : 0,
-      // ДОДАНО: Нові загальні метрики
       oas:
         totalMetrics.spend > 0
           ? Math.round(
@@ -1855,7 +1893,6 @@ const getTeamMonthlyStats = async (
           .length,
         avg_daily_spend: totalMetrics.spend / daysInMonth,
         avg_daily_deps: totalMetrics.deps / daysInMonth,
-        // ДОДАНО: Середній денний прибуток
         avg_daily_profit: totalMetrics.total_profit / daysInMonth,
         top_users: topUsersWithProfit,
       },
@@ -1867,8 +1904,8 @@ const getTeamMonthlyStats = async (
 };
 
 /**
- * НОВИЙ: Отримання статистики компанії за місяць по днях з коректним розрахунком прибутку
- * ДОДАНО: нові метрики OAS, RD, URD, CPD та розрахунок прибутку за кожен день
+ * ОНОВЛЕНО: Отримання статистики компанії за місяць по днях з новою логікою прибутку
+ * Використовує calculateSpendMultiplier для SPEND потоків
  * @param {Object} options - Опції фільтрації
  * @param {number} options.month - Місяць (1-12)
  * @param {number} options.year - Рік
@@ -1896,7 +1933,7 @@ const getCompanyDailyStats = async (
     // Отримуємо кількість днів у місяці
     const daysInMonth = new Date(year, month, 0).getDate();
 
-    // ОСНОВНИЙ: Запит для отримання денної статистики всієї компанії
+    // Запит для отримання денної статистики всієї компанії
     const dailyStatsQuery = `
       WITH days_series AS (
         SELECT generate_series(1, $2) as day
@@ -1952,7 +1989,7 @@ const getCompanyDailyStats = async (
         active_teams_count,
         daily_flow_stats,
         
-        -- Існуючі обчислювальні поля
+        -- Базові метрики
         CASE 
           WHEN total_installs > 0 
           THEN ROUND((total_regs::numeric / total_installs * 100)::numeric, 2)
@@ -1969,7 +2006,7 @@ const getCompanyDailyStats = async (
           ELSE 0 
         END as verification_rate,
         
-        -- ДОДАНО: Нові метрики
+        -- Нові метрики
         CASE 
           WHEN total_spend > 0 
           THEN ROUND((total_deposit_amount::numeric / total_spend * 100)::numeric, 2)
@@ -2000,7 +2037,7 @@ const getCompanyDailyStats = async (
       year,
     ]);
 
-    // Отримуємо дані про всі активні потоки компанії для розрахунку прибутку
+    // Отримуємо дані про всі активні потоки компанії
     const companyFlowsQuery = `
       SELECT 
         f.id,
@@ -2022,39 +2059,37 @@ const getCompanyDailyStats = async (
       flowsMap[flow.id] = flow;
     });
 
-    // Розрахунок KPI для spend потоків (кешуємо для оптимізації)
+    // ОНОВЛЕНО: Розрахунок множників для SPEND потоків (кешуємо для оптимізації)
     const spendFlows = companyFlows.filter((f) => f.flow_type === "spend");
-    const monthlyKpiCache = {};
+    const spendMultiplierCache = {};
 
     console.log(
-      `Розраховуємо KPI для ${spendFlows.length} spend потоків компанії...`
+      `Розраховуємо множники для ${spendFlows.length} spend потоків компанії...`
     );
 
     for (const flow of spendFlows) {
       try {
-        const monthlyKpi = await calculateMonthlyKPI(
+        const multiplier = await calculateSpendMultiplier(
           flow.id,
-          flow.kpi_metric,
           month,
           year,
+          flow.kpi_target_value,
+          flow.spend_percentage_ranges,
           undefined, // не фільтруємо по користувачу для всієї компанії
           "admin", // використовуємо admin роль для доступу до всіх даних
           requesting_user_id
         );
-        monthlyKpiCache[flow.id] = {
-          kpi: monthlyKpi,
-          multiplier: findSpendMultiplier(
-            monthlyKpi,
-            flow.spend_percentage_ranges
-          ),
-        };
+        spendMultiplierCache[flow.id] = multiplier;
       } catch (error) {
-        console.error(`Помилка розрахунку KPI для потоку ${flow.id}:`, error);
-        monthlyKpiCache[flow.id] = { kpi: 0, multiplier: 0 };
+        console.error(
+          `Помилка розрахунку множника для потоку ${flow.id}:`,
+          error
+        );
+        spendMultiplierCache[flow.id] = 0;
       }
     }
 
-    // ЗАГАЛЬНА СТАТИСТИКА: Основні показники компанії за місяць
+    // Загальна статистика компанії за місяць
     const summaryQuery = `
       SELECT 
         COUNT(DISTINCT f.id) as total_company_flows,
@@ -2076,26 +2111,6 @@ const getCompanyDailyStats = async (
         COUNT(DISTINCT o.id) as unique_offers,
         COUNT(DISTINCT f.geo_id) as unique_geos,
         
-        -- Найкращий день за прибутковістю (спрощений розрахунок через CPA)
-        (SELECT day FROM flow_stats fs2 
-         JOIN flows f2 ON fs2.flow_id = f2.id
-         WHERE fs2.month = $1 AND fs2.year = $2
-         AND fs2.spend > 0 AND fs2.deps > 0 AND fs2.cpa > 0
-         AND f2.flow_type = 'cpa'
-         GROUP BY day
-         ORDER BY (SUM(fs2.deps * fs2.cpa) - SUM(fs2.spend)) DESC
-         LIMIT 1) as best_profit_day,
-         
-        -- Найгірший день
-        (SELECT day FROM flow_stats fs2 
-         JOIN flows f2 ON fs2.flow_id = f2.id
-         WHERE fs2.month = $1 AND fs2.year = $2
-         AND fs2.spend > 0 AND fs2.deps > 0 AND fs2.cpa > 0
-         AND f2.flow_type = 'cpa'
-         GROUP BY day
-         ORDER BY (SUM(fs2.deps * fs2.cpa) - SUM(fs2.spend)) ASC
-         LIMIT 1) as worst_profit_day,
-         
         -- Найпродуктивніший користувач за місяць
         (SELECT fs.user_id FROM flow_stats fs 
          WHERE fs.month = $1 AND fs.year = $2
@@ -2112,7 +2127,7 @@ const getCompanyDailyStats = async (
     const summaryResult = await db.query(summaryQuery, [month, year]);
     const summary = summaryResult.rows[0];
 
-    // ТОП КОМАНДИ: Статистика по командах за місяць з новими метриками
+    // Топ команди
     const topTeamsQuery = `
       SELECT 
         t.id as team_id,
@@ -2158,7 +2173,7 @@ const getCompanyDailyStats = async (
       LIMIT 10
     `;
 
-    // ТОП КОРИСТУВАЧІ: З усіх команд компанії
+    // Топ користувачі
     const topUsersQuery = `
       SELECT 
         u.id as user_id,
@@ -2207,7 +2222,7 @@ const getCompanyDailyStats = async (
       LIMIT 10
     `;
 
-    // ТОП ПАРТНЕРИ: За обсягом витрат
+    // Топ партнери
     const topPartnersQuery = `
       SELECT 
         p.id as partner_id,
@@ -2263,7 +2278,7 @@ const getCompanyDailyStats = async (
         db.query(topPartnersQuery, [month, year]),
       ]);
 
-    // ФУНКЦІЯ: Розрахунок денного прибутку
+    // ОНОВЛЕНО: Функція для розрахунку денного прибутку
     const calculateDayProfit = (dailyFlowStats) => {
       if (!dailyFlowStats || dailyFlowStats.length === 0) {
         return 0;
@@ -2308,11 +2323,9 @@ const getCompanyDailyStats = async (
           const cpa = aggregate.cpa || flow.cpa || 0;
           flowRevenue = depsForCalculation * cpa;
         } else if (flow.flow_type === "spend") {
-          // SPEND модель
-          const cached = monthlyKpiCache[flowId];
-          if (cached && cached.multiplier > 0) {
-            flowRevenue = aggregate.spend * cached.multiplier;
-          }
+          // SPEND модель - використовуємо кешований множник
+          const multiplier = spendMultiplierCache[flowId] || 0;
+          flowRevenue = aggregate.spend * multiplier;
         }
 
         dayRevenue += flowRevenue;
@@ -2322,10 +2335,8 @@ const getCompanyDailyStats = async (
       return Math.round(dayProfit * 100) / 100;
     };
 
-    // ФУНКЦІЯ: Розрахунок прибутку для сутностей (команди, користувачі, партнери)
+    // ОНОВЛЕНО: Функція для розрахунку прибутку сутностей (спрощений підхід через пропорції)
     const calculateEntityProfit = async (entityType, entityData) => {
-      // Спрощений розрахунок через пропорцію від загального денного прибутку
-      // В ідеалі тут треба було б робити детальні запити по потоках кожної сутності
       const totalSpend = parseFloat(summary.total_spend) || 0;
       const entitySpend = parseFloat(entityData.total_spend) || 0;
 
@@ -2341,10 +2352,11 @@ const getCompanyDailyStats = async (
       return Math.round(totalMonthlyProfit * proportion * 100) / 100;
     };
 
-    // ФОРМАТ РЕЗУЛЬТАТІВ: Денна статистика з розрахунком прибутку
+    // Денна статистика з розрахунком прибутку
     const dailyStats = dailyResult.rows.map((row) => {
       const dayProfit = calculateDayProfit(row.daily_flow_stats);
       const daySpend = parseFloat(row.total_spend) || 0;
+      const dayRevenue = dayProfit + daySpend;
 
       return {
         day: parseInt(row.day),
@@ -2362,7 +2374,7 @@ const getCompanyDailyStats = async (
           unique_redep_count: parseInt(row.total_unique_redep_count) || 0,
           avg_cpa: parseFloat(row.avg_cpa) || 0,
           profit: dayProfit,
-          revenue: dayProfit + daySpend, // revenue = profit + spend
+          revenue: dayRevenue,
         },
         calculated: {
           roi:
@@ -2391,6 +2403,8 @@ const getCompanyDailyStats = async (
     const topTeamsWithProfit = await Promise.all(
       topTeamsResult.rows.map(async (team) => {
         const teamProfit = await calculateEntityProfit("team", team);
+        const teamSpend = parseFloat(team.total_spend) || 0;
+        const teamRevenue = teamProfit + teamSpend;
 
         return {
           team_id: team.team_id,
@@ -2398,19 +2412,17 @@ const getCompanyDailyStats = async (
           flows: parseInt(team.team_flows) || 0,
           users: parseInt(team.team_users) || 0,
           metrics: {
-            spend: parseFloat(team.total_spend) || 0,
+            spend: teamSpend,
             deps: parseInt(team.total_deps) || 0,
             verified_deps: parseInt(team.total_verified_deps) || 0,
             deposit_amount: parseFloat(team.total_deposit_amount) || 0,
             redep_count: parseInt(team.total_redep_count) || 0,
             unique_redep_count: parseInt(team.total_unique_redep_count) || 0,
             profit: teamProfit,
-            revenue: teamProfit + (parseFloat(team.total_spend) || 0),
+            revenue: teamRevenue,
             roi:
-              parseFloat(team.total_spend) > 0
-                ? Math.round(
-                    (teamProfit / parseFloat(team.total_spend)) * 100 * 100
-                  ) / 100
+              teamSpend > 0
+                ? Math.round((teamProfit / teamSpend) * 100 * 100) / 100
                 : 0,
             oas: parseFloat(team.oas) || 0,
             rd: parseFloat(team.rd) || 0,
@@ -2425,6 +2437,8 @@ const getCompanyDailyStats = async (
     const topUsersWithProfit = await Promise.all(
       topUsersResult.rows.map(async (user) => {
         const userProfit = await calculateEntityProfit("user", user);
+        const userSpend = parseFloat(user.total_spend) || 0;
+        const userRevenue = userProfit + userSpend;
 
         return {
           user_id: user.user_id,
@@ -2436,19 +2450,17 @@ const getCompanyDailyStats = async (
           team_name: user.team_name,
           active_flows: parseInt(user.active_flows) || 0,
           metrics: {
-            spend: parseFloat(user.total_spend) || 0,
+            spend: userSpend,
             deps: parseInt(user.total_deps) || 0,
             verified_deps: parseInt(user.total_verified_deps) || 0,
             deposit_amount: parseFloat(user.total_deposit_amount) || 0,
             redep_count: parseInt(user.total_redep_count) || 0,
             unique_redep_count: parseInt(user.total_unique_redep_count) || 0,
             profit: userProfit,
-            revenue: userProfit + (parseFloat(user.total_spend) || 0),
+            revenue: userRevenue,
             roi:
-              parseFloat(user.total_spend) > 0
-                ? Math.round(
-                    (userProfit / parseFloat(user.total_spend)) * 100 * 100
-                  ) / 100
+              userSpend > 0
+                ? Math.round((userProfit / userSpend) * 100 * 100) / 100
                 : 0,
             oas: parseFloat(user.oas) || 0,
             rd: parseFloat(user.rd) || 0,
@@ -2463,6 +2475,8 @@ const getCompanyDailyStats = async (
     const topPartnersWithProfit = await Promise.all(
       topPartnersResult.rows.map(async (partner) => {
         const partnerProfit = await calculateEntityProfit("partner", partner);
+        const partnerSpend = parseFloat(partner.total_spend) || 0;
+        const partnerRevenue = partnerProfit + partnerSpend;
 
         return {
           partner_id: partner.partner_id,
@@ -2471,21 +2485,17 @@ const getCompanyDailyStats = async (
           flows: parseInt(partner.partner_flows) || 0,
           offers: parseInt(partner.partner_offers) || 0,
           metrics: {
-            spend: parseFloat(partner.total_spend) || 0,
+            spend: partnerSpend,
             deps: parseInt(partner.total_deps) || 0,
             verified_deps: parseInt(partner.total_verified_deps) || 0,
             deposit_amount: parseFloat(partner.total_deposit_amount) || 0,
             redep_count: parseInt(partner.total_redep_count) || 0,
             unique_redep_count: parseInt(partner.total_unique_redep_count) || 0,
             profit: partnerProfit,
-            revenue: partnerProfit + (parseFloat(partner.total_spend) || 0),
+            revenue: partnerRevenue,
             roi:
-              parseFloat(partner.total_spend) > 0
-                ? Math.round(
-                    (partnerProfit / parseFloat(partner.total_spend)) *
-                      100 *
-                      100
-                  ) / 100
+              partnerSpend > 0
+                ? Math.round((partnerProfit / partnerSpend) * 100 * 100) / 100
                 : 0,
             oas: parseFloat(partner.oas) || 0,
             rd: parseFloat(partner.rd) || 0,
@@ -2584,9 +2594,28 @@ const getCompanyDailyStats = async (
           : 0,
     };
 
+    // Знаходимо найкращий та найгірший день за прибутком
+    let bestProfitDay = null;
+    let worstProfitDay = null;
+    let bestProfit = -Infinity;
+    let worstProfit = Infinity;
+
+    dailyStats.forEach((day) => {
+      if (day.meta.has_activity) {
+        if (day.metrics.profit > bestProfit) {
+          bestProfit = day.metrics.profit;
+          bestProfitDay = day.day;
+        }
+        if (day.metrics.profit < worstProfit) {
+          worstProfit = day.metrics.profit;
+          worstProfitDay = day.day;
+        }
+      }
+    });
+
     return {
       company: {
-        name: "Company", // Можна додати реальну назву компанії з конфігурації
+        name: "Company",
       },
       period: { month, year },
       daily_stats: dailyStats,
@@ -2604,9 +2633,9 @@ const getCompanyDailyStats = async (
         metrics: totalMetrics,
         calculated: totalCalculated,
 
-        // Додаткові інсайти
-        best_profit_day: summary.best_profit_day,
-        worst_profit_day: summary.worst_profit_day,
+        // Інсайти
+        best_profit_day: bestProfitDay,
+        worst_profit_day: worstProfitDay,
         top_user_id: summary.top_user_id,
         days_with_activity: dailyStats.filter((day) => day.meta.has_activity)
           .length,
@@ -2615,13 +2644,13 @@ const getCompanyDailyStats = async (
         avg_daily_profit: totalMetrics.total_profit / daysInMonth,
         avg_daily_revenue: totalMetrics.total_revenue / daysInMonth,
 
-        // Топи за місяць
+        // Топи
         top_teams: topTeamsWithProfit.slice(0, 5),
         top_users: topUsersWithProfit.slice(0, 10),
         top_partners: topPartnersWithProfit.slice(0, 5),
       },
 
-      // Повні розбивки для детального аналізу
+      // Повні розбивки
       breakdowns: {
         teams: topTeamsWithProfit,
         users: topUsersWithProfit,
@@ -2671,8 +2700,8 @@ const getCompanyDailyStats = async (
         flows_processed: companyFlows.length,
         cpa_flows: companyFlows.filter((f) => f.flow_type === "cpa").length,
         spend_flows: spendFlows.length,
-        spend_flows_with_kpi: Object.keys(monthlyKpiCache).length,
-        calculation_method: "company_daily_mixed_model",
+        spend_flows_with_multiplier: Object.keys(spendMultiplierCache).length,
+        calculation_method: "company_daily_mixed_model_v2",
       },
     };
   } catch (error) {
@@ -2685,7 +2714,7 @@ const getCompanyDailyStats = async (
 
 /**
  * ОНОВЛЕНО: Отримання всіх потоків із агрегованою статистикою за місяць для користувача
- * ДОДАНО: нові метрики OAS, RD, URD, CPD та розрахунок прибутку
+ * Використовує нову логіку розрахунку прибутку для SPEND потоків
  * @param {number} userId - ID користувача
  * @param {Object} options - Опції фільтрації
  * @param {number} options.month - Місяць (1-12)
@@ -2712,7 +2741,7 @@ const getUserFlowsMonthlyStats = async (
   }
 
   try {
-    // ОНОВЛЕНО: запит з урахуванням user_id в flow_stats та новими метриками
+    // Запит з агрегованою статистикою
     const flowsQuery = `
       SELECT 
         f.id as flow_id,
@@ -2744,7 +2773,7 @@ const getUserFlowsMonthlyStats = async (
         g.name as geo_name,
         g.country_code as geo_country_code,
         
-        -- ОНОВЛЕНО: Агрегована статистика за місяць з новими полями
+        -- Агрегована статистика за місяць
         COALESCE(SUM(fs.spend), 0) as total_spend,
         COALESCE(SUM(fs.installs), 0) as total_installs,
         COALESCE(SUM(fs.regs), 0) as total_regs,
@@ -2756,7 +2785,7 @@ const getUserFlowsMonthlyStats = async (
         COALESCE(AVG(fs.cpa), f.cpa) as avg_cpa,
         COUNT(fs.id) as days_with_stats,
         
-        -- Існуючі обчислювальні поля
+        -- Базові метрики
         CASE 
           WHEN SUM(fs.spend) > 0 AND SUM(fs.deps) > 0 AND COALESCE(AVG(fs.cpa), f.cpa) > 0
           THEN ROUND(((SUM(fs.deps) * COALESCE(AVG(fs.cpa), f.cpa) - SUM(fs.spend)) / SUM(fs.spend) * 100)::numeric, 2)
@@ -2778,29 +2807,24 @@ const getUserFlowsMonthlyStats = async (
           ELSE 0 
         END as verification_rate,
         
-        -- ДОДАНО: Нові обчислювальні метрики
-        -- OAS - (deposit_amount / spend) * 100%
+        -- OAS - для всіх типів потоків
         CASE 
           WHEN SUM(fs.spend) > 0 
           THEN ROUND((SUM(fs.deposit_amount)::numeric / SUM(fs.spend) * 100)::numeric, 2)
           ELSE 0 
         END as oas,
         
-        -- RD - (redep_count / deps) * 100%
+        -- RD, URD, CPD - для CPA потоків
         CASE 
           WHEN SUM(COALESCE(fs.verified_deps, fs.deps)) > 0 
           THEN ROUND((SUM(fs.redep_count)::numeric / SUM(COALESCE(fs.verified_deps, fs.deps)) * 100)::numeric, 2)
           ELSE 0 
         END as rd,
-        
-        -- URD - (unique_redep_count / deps) * 100%
         CASE 
           WHEN SUM(COALESCE(fs.verified_deps, fs.deps)) > 0 
           THEN ROUND((SUM(fs.unique_redep_count)::numeric / SUM(COALESCE(fs.verified_deps, fs.deps)) * 100)::numeric, 2)
           ELSE 0 
         END as urd,
-        
-        -- CPD - spend / deps
         CASE 
           WHEN SUM(COALESCE(fs.verified_deps, fs.deps)) > 0 
           THEN ROUND((SUM(fs.spend)::numeric / SUM(COALESCE(fs.verified_deps, fs.deps)))::numeric, 2)
@@ -2832,10 +2856,11 @@ const getUserFlowsMonthlyStats = async (
 
     const result = await db.query(flowsQuery, [userId, month, year]);
 
-    // ДОДАНО: Розрахунок прибутку для кожного потоку
+    // ОНОВЛЕНО: Розрахунок прибутку з новою логікою
     const flowsWithProfit = await Promise.all(
       result.rows.map(async (row) => {
         let profit = 0;
+        let spendMultiplier = 0;
 
         if (row.flow_type === "cpa") {
           // CPA модель: verified_deps (або deps) * cpa
@@ -2843,20 +2868,16 @@ const getUserFlowsMonthlyStats = async (
             parseInt(row.total_verified_deps) || parseInt(row.total_deps) || 0;
           profit = depsForCalculation * (parseFloat(row.flow_cpa) || 0);
         } else if (row.flow_type === "spend") {
-          // SPEND модель: розрахунок KPI для конкретного потоку та користувача
-          const monthlyKpi = await calculateMonthlyKPI(
+          // SPEND модель: використовуємо новий метод calculateSpendMultiplier
+          spendMultiplier = await calculateSpendMultiplier(
             row.flow_id,
-            row.kpi_metric,
             month,
             year,
+            row.kpi_target_value,
+            row.spend_percentage_ranges,
             userId, // фільтрація по користувачу
             user_role,
             requesting_user_id
-          );
-
-          const spendMultiplier = findSpendMultiplier(
-            monthlyKpi,
-            row.spend_percentage_ranges
           );
 
           profit = parseFloat(row.total_spend) * spendMultiplier;
@@ -2865,23 +2886,12 @@ const getUserFlowsMonthlyStats = async (
         return {
           ...row,
           profit: Math.round(profit * 100) / 100,
-          monthly_kpi:
-            row.flow_type === "spend"
-              ? await calculateMonthlyKPI(
-                  row.flow_id,
-                  row.kpi_metric,
-                  month,
-                  year,
-                  userId,
-                  user_role,
-                  requesting_user_id
-                )
-              : undefined,
+          spend_multiplier: spendMultiplier, // Для інформації
         };
       })
     );
 
-    // ОНОВЛЕНО: Загальна статистика користувача за місяць з новими полями
+    // Загальна статистика користувача за місяць
     const userSummaryQuery = `
       SELECT 
         COUNT(DISTINCT f.id) as total_flows,
@@ -2913,7 +2923,7 @@ const getUserFlowsMonthlyStats = async (
     ]);
     const summary = summaryResult.rows[0];
 
-    // Форматуємо результат з новими полями та прибутком
+    // Форматуємо результат
     const flows = flowsWithProfit.map((row) => ({
       flow: {
         id: row.flow_id,
@@ -2962,28 +2972,32 @@ const getUserFlowsMonthlyStats = async (
         unique_redep_count: parseInt(row.total_unique_redep_count) || 0,
         avg_cpa: parseFloat(row.avg_cpa) || 0,
         days_with_stats: parseInt(row.days_with_stats) || 0,
-        // Існуючі метрики
+        // ВИПРАВЛЕНО: ROI тепер розраховується правильно
         roi:
-          row.total_spend > 0
-            ? Math.round((row.profit / row.total_spend) * 100 * 100) / 100 - 100
+          parseFloat(row.total_spend) > 0
+            ? Math.round(
+                ((row.profit - parseFloat(row.total_spend)) /
+                  parseFloat(row.total_spend)) *
+                  100 *
+                  100
+              ) / 100
             : 0,
         inst2reg: parseFloat(row.inst2reg) || 0,
         reg2dep: parseFloat(row.reg2dep) || 0,
         verification_rate: parseFloat(row.verification_rate) || 0,
-        // ДОДАНО: Нові метрики
         oas: parseFloat(row.oas) || 0,
         rd: parseFloat(row.rd) || 0,
         urd: parseFloat(row.urd) || 0,
         cpd: parseFloat(row.cpd) || 0,
-        // ДОДАНО: Прибуток
         profit: parseFloat(row.profit) || 0,
         // Додаткова інформація для spend моделі
-        monthly_kpi: parseFloat(row.monthly_kpi) || undefined,
+        spend_multiplier:
+          row.flow_type === "spend" ? row.spend_multiplier : undefined,
         has_activity: row.has_activity,
       },
     }));
 
-    // Обчислюємо загальні метрики з новими полями та прибутком
+    // Обчислюємо загальні метрики
     const totalMetrics = {
       spend: parseFloat(summary.total_spend) || 0,
       installs: parseInt(summary.total_installs) || 0,
@@ -2993,11 +3007,9 @@ const getUserFlowsMonthlyStats = async (
       deposit_amount: parseFloat(summary.total_deposit_amount) || 0,
       redep_count: parseInt(summary.total_redep_count) || 0,
       unique_redep_count: parseInt(summary.total_unique_redep_count) || 0,
-      // ДОДАНО: Загальний прибуток
       total_profit: flows.reduce((sum, flow) => sum + flow.stats.profit, 0),
     };
 
-    // Використовуємо verified_deps або deps для розрахунків
     const depsForCalculation =
       totalMetrics.verified_deps > 0
         ? totalMetrics.verified_deps
@@ -3015,14 +3027,15 @@ const getUserFlowsMonthlyStats = async (
         unique_geos: parseInt(summary.unique_geos) || 0,
         metrics: totalMetrics,
         calculated: {
-          // Існуючі метрики (ROI тепер через прибуток)
+          // ВИПРАВЛЕНО: ROI через правильну формулу
           total_roi:
             totalMetrics.spend > 0
               ? Math.round(
-                  (totalMetrics.total_profit / totalMetrics.spend) * 100 * 100
-                ) /
-                  100 -
-                100
+                  ((totalMetrics.total_profit - totalMetrics.spend) /
+                    totalMetrics.spend) *
+                    100 *
+                    100
+                ) / 100
               : 0,
           avg_inst2reg:
             totalMetrics.installs > 0
@@ -3042,7 +3055,6 @@ const getUserFlowsMonthlyStats = async (
                   (totalMetrics.verified_deps / totalMetrics.deps) * 100 * 100
                 ) / 100
               : 0,
-          // ДОДАНО: Нові загальні метрики
           avg_oas:
             totalMetrics.spend > 0
               ? Math.round(
@@ -3079,7 +3091,7 @@ const getUserFlowsMonthlyStats = async (
 
 /**
  * ОНОВЛЕНО: Отримання всіх потоків із агрегованою статистикою за місяць для команди
- * ДОДАНО: нові метрики OAS, RD, URD, CPD та розрахунок прибутку
+ * Використовує нову логіку розрахунку прибутку для SPEND потоків
  * @param {number} teamId - ID команди
  * @param {Object} options - Опції фільтрації
  * @param {number} options.month - Місяць (1-12)
@@ -3106,7 +3118,7 @@ const getTeamFlowsMonthlyStats = async (
   }
 
   try {
-    // ОНОВЛЕНО: запит з урахуванням user_id в flow_stats та новими метриками
+    // Запит з агрегованою статистикою
     const flowsQuery = `
       SELECT 
         f.id as flow_id,
@@ -3138,7 +3150,7 @@ const getTeamFlowsMonthlyStats = async (
         g.name as geo_name,
         g.country_code as geo_country_code,
         
-        -- ОНОВЛЕНО: Агрегована статистика за місяць з новими полями
+        -- Агрегована статистика за місяць
         COALESCE(SUM(fs.spend), 0) as total_spend,
         COALESCE(SUM(fs.installs), 0) as total_installs,
         COALESCE(SUM(fs.regs), 0) as total_regs,
@@ -3151,7 +3163,7 @@ const getTeamFlowsMonthlyStats = async (
         COUNT(fs.id) as days_with_stats,
         COUNT(DISTINCT fs.user_id) as active_users_count,
         
-        -- Існуючі обчислювальні поля
+        -- Базові метрики
         CASE 
           WHEN SUM(fs.spend) > 0 AND SUM(fs.deps) > 0 AND COALESCE(AVG(fs.cpa), f.cpa) > 0
           THEN ROUND(((SUM(fs.deps) * COALESCE(AVG(fs.cpa), f.cpa) - SUM(fs.spend)) / SUM(fs.spend) * 100)::numeric, 2)
@@ -3173,29 +3185,24 @@ const getTeamFlowsMonthlyStats = async (
           ELSE 0 
         END as verification_rate,
         
-        -- ДОДАНО: Нові обчислювальні метрики
-        -- OAS - (deposit_amount / spend) * 100%
+        -- OAS - для всіх типів потоків
         CASE 
           WHEN SUM(fs.spend) > 0 
           THEN ROUND((SUM(fs.deposit_amount)::numeric / SUM(fs.spend) * 100)::numeric, 2)
           ELSE 0 
         END as oas,
         
-        -- RD - (redep_count / deps) * 100%
+        -- RD, URD, CPD - для CPA потоків
         CASE 
           WHEN SUM(COALESCE(fs.verified_deps, fs.deps)) > 0 
           THEN ROUND((SUM(fs.redep_count)::numeric / SUM(COALESCE(fs.verified_deps, fs.deps)) * 100)::numeric, 2)
           ELSE 0 
         END as rd,
-        
-        -- URD - (unique_redep_count / deps) * 100%
         CASE 
           WHEN SUM(COALESCE(fs.verified_deps, fs.deps)) > 0 
           THEN ROUND((SUM(fs.unique_redep_count)::numeric / SUM(COALESCE(fs.verified_deps, fs.deps)) * 100)::numeric, 2)
           ELSE 0 
         END as urd,
-        
-        -- CPD - spend / deps
         CASE 
           WHEN SUM(COALESCE(fs.verified_deps, fs.deps)) > 0 
           THEN ROUND((SUM(fs.spend)::numeric / SUM(COALESCE(fs.verified_deps, fs.deps)))::numeric, 2)
@@ -3234,10 +3241,11 @@ const getTeamFlowsMonthlyStats = async (
 
     const result = await db.query(flowsQuery, [teamId, month, year]);
 
-    // ДОДАНО: Розрахунок прибутку для кожного потоку
+    // ОНОВЛЕНО: Розрахунок прибутку з новою логікою
     const flowsWithProfit = await Promise.all(
       result.rows.map(async (row) => {
         let profit = 0;
+        let spendMultiplier = 0;
 
         if (row.flow_type === "cpa") {
           // CPA модель: verified_deps (або deps) * cpa
@@ -3245,20 +3253,16 @@ const getTeamFlowsMonthlyStats = async (
             parseInt(row.total_verified_deps) || parseInt(row.total_deps) || 0;
           profit = depsForCalculation * (parseFloat(row.flow_cpa) || 0);
         } else if (row.flow_type === "spend") {
-          // SPEND модель: розрахунок KPI для потоку команди
-          const monthlyKpi = await calculateMonthlyKPI(
+          // SPEND модель: використовуємо новий метод calculateSpendMultiplier
+          spendMultiplier = await calculateSpendMultiplier(
             row.flow_id,
-            row.kpi_metric,
             month,
             year,
+            row.kpi_target_value,
+            row.spend_percentage_ranges,
             undefined, // не фільтруємо по користувачу для команди
             user_role,
             requesting_user_id
-          );
-
-          const spendMultiplier = findSpendMultiplier(
-            monthlyKpi,
-            row.spend_percentage_ranges
           );
 
           profit = parseFloat(row.total_spend) * spendMultiplier;
@@ -3267,23 +3271,12 @@ const getTeamFlowsMonthlyStats = async (
         return {
           ...row,
           profit: Math.round(profit * 100) / 100,
-          monthly_kpi:
-            row.flow_type === "spend"
-              ? await calculateMonthlyKPI(
-                  row.flow_id,
-                  row.kpi_metric,
-                  month,
-                  year,
-                  undefined,
-                  user_role,
-                  requesting_user_id
-                )
-              : undefined,
+          spend_multiplier: spendMultiplier, // Для інформації
         };
       })
     );
 
-    // ОНОВЛЕНО: Загальна статистика команди за місяць з новими полями
+    // Загальна статистика команди за місяць
     const teamSummaryQuery = `
       SELECT 
         t.name as team_name,
@@ -3321,7 +3314,7 @@ const getTeamFlowsMonthlyStats = async (
       throw new Error("Команду не знайдено");
     }
 
-    // Форматуємо результат з новими полями та прибутком
+    // Форматуємо результат
     const flows = flowsWithProfit.map((row) => ({
       flow: {
         id: row.flow_id,
@@ -3371,33 +3364,33 @@ const getTeamFlowsMonthlyStats = async (
         avg_cpa: parseFloat(row.avg_cpa) || 0,
         days_with_stats: parseInt(row.days_with_stats) || 0,
         active_users_count: parseInt(row.active_users_count) || 0,
-        // Існуючі метрики (ROI тепер через прибуток)
+        // ВИПРАВЛЕНО: ROI тепер розраховується правильно
         roi:
           parseFloat(row.total_spend) > 0
             ? Math.round(
-                (row.profit / parseFloat(row.total_spend)) * 100 * 100
-              ) /
-                100 -
-              100
+                ((row.profit - parseFloat(row.total_spend)) /
+                  parseFloat(row.total_spend)) *
+                  100 *
+                  100
+              ) / 100
             : 0,
         inst2reg: parseFloat(row.inst2reg) || 0,
         reg2dep: parseFloat(row.reg2dep) || 0,
         verification_rate: parseFloat(row.verification_rate) || 0,
-        // ДОДАНО: Нові метрики
         oas: parseFloat(row.oas) || 0,
         rd: parseFloat(row.rd) || 0,
         urd: parseFloat(row.urd) || 0,
         cpd: parseFloat(row.cpd) || 0,
-        // ДОДАНО: Прибуток
         profit: parseFloat(row.profit) || 0,
         // Додаткова інформація для spend моделі
-        monthly_kpi: parseFloat(row.monthly_kpi) || undefined,
+        spend_multiplier:
+          row.flow_type === "spend" ? row.spend_multiplier : undefined,
         has_activity: row.has_activity,
         top_user_username: row.top_user_username,
       },
     }));
 
-    // Обчислюємо загальні метрики з новими полями та прибутком
+    // Обчислюємо загальні метрики
     const totalMetrics = {
       spend: parseFloat(summary.total_spend) || 0,
       installs: parseInt(summary.total_installs) || 0,
@@ -3407,11 +3400,9 @@ const getTeamFlowsMonthlyStats = async (
       deposit_amount: parseFloat(summary.total_deposit_amount) || 0,
       redep_count: parseInt(summary.total_redep_count) || 0,
       unique_redep_count: parseInt(summary.total_unique_redep_count) || 0,
-      // ДОДАНО: Загальний прибуток
       total_profit: flows.reduce((sum, flow) => sum + flow.stats.profit, 0),
     };
 
-    // Використовуємо verified_deps або deps для розрахунків
     const depsForCalculation =
       totalMetrics.verified_deps > 0
         ? totalMetrics.verified_deps
@@ -3433,14 +3424,15 @@ const getTeamFlowsMonthlyStats = async (
         unique_geos: parseInt(summary.unique_geos) || 0,
         metrics: totalMetrics,
         calculated: {
-          // Існуючі метрики (ROI тепер через прибуток)
+          // ВИПРАВЛЕНО: ROI через правильну формулу
           total_roi:
             totalMetrics.spend > 0
               ? Math.round(
-                  (totalMetrics.total_profit / totalMetrics.spend) * 100 * 100
-                ) /
-                  100 -
-                100
+                  ((totalMetrics.total_profit - totalMetrics.spend) /
+                    totalMetrics.spend) *
+                    100 *
+                    100
+                ) / 100
               : 0,
           avg_inst2reg:
             totalMetrics.installs > 0
@@ -3460,7 +3452,6 @@ const getTeamFlowsMonthlyStats = async (
                   (totalMetrics.verified_deps / totalMetrics.deps) * 100 * 100
                 ) / 100
               : 0,
-          // ДОДАНО: Нові загальні метрики
           avg_oas:
             totalMetrics.spend > 0
               ? Math.round(
@@ -3496,8 +3487,8 @@ const getTeamFlowsMonthlyStats = async (
 };
 
 /**
- * ОНОВЛЕНО: Отримання всіх потоків із агрегованою статистикою за місяць для команди
- * ДОДАНО: нові метрики OAS, RD, URD, CPD та розрахунок прибутку
+ * ОНОВЛЕНО: Отримання всіх потоків із агрегованою статистикою за місяць для компанії
+ * Використовує нову логіку розрахунку прибутку для SPEND потоків
  * @param {Object} options - Опції фільтрації
  * @param {number} options.month - Місяць (1-12)
  * @param {number} options.year - Рік
@@ -3518,11 +3509,11 @@ const getCompanyFlowsMonthlyStats = async (
 
   // Перевірка прав доступу
   if (user_role === "buyer") {
-    throw new Error("Buyer не має доступу до статистики команди");
+    throw new Error("Buyer не має доступу до статистики компанії");
   }
 
   try {
-    // ОНОВЛЕНО: запит з урахуванням user_id в flow_stats та новими метриками
+    // Запит з агрегованою статистикою
     const flowsQuery = `
       SELECT 
         f.id as flow_id,
@@ -3554,7 +3545,7 @@ const getCompanyFlowsMonthlyStats = async (
         g.name as geo_name,
         g.country_code as geo_country_code,
         
-        -- ОНОВЛЕНО: Агрегована статистика за місяць з новими полями
+        -- Агрегована статистика за місяць
         COALESCE(SUM(fs.spend), 0) as total_spend,
         COALESCE(SUM(fs.installs), 0) as total_installs,
         COALESCE(SUM(fs.regs), 0) as total_regs,
@@ -3567,7 +3558,7 @@ const getCompanyFlowsMonthlyStats = async (
         COUNT(fs.id) as days_with_stats,
         COUNT(DISTINCT fs.user_id) as active_users_count,
         
-        -- Існуючі обчислювальні поля
+        -- Базові метрики
         CASE 
           WHEN SUM(fs.spend) > 0 AND SUM(fs.deps) > 0 AND COALESCE(AVG(fs.cpa), f.cpa) > 0
           THEN ROUND(((SUM(fs.deps) * COALESCE(AVG(fs.cpa), f.cpa) - SUM(fs.spend)) / SUM(fs.spend) * 100)::numeric, 2)
@@ -3589,29 +3580,24 @@ const getCompanyFlowsMonthlyStats = async (
           ELSE 0 
         END as verification_rate,
         
-        -- ДОДАНО: Нові обчислювальні метрики
-        -- OAS - (deposit_amount / spend) * 100%
+        -- OAS - для всіх типів потоків
         CASE 
           WHEN SUM(fs.spend) > 0 
           THEN ROUND((SUM(fs.deposit_amount)::numeric / SUM(fs.spend) * 100)::numeric, 2)
           ELSE 0 
         END as oas,
         
-        -- RD - (redep_count / deps) * 100%
+        -- RD, URD, CPD - для CPA потоків
         CASE 
           WHEN SUM(COALESCE(fs.verified_deps, fs.deps)) > 0 
           THEN ROUND((SUM(fs.redep_count)::numeric / SUM(COALESCE(fs.verified_deps, fs.deps)) * 100)::numeric, 2)
           ELSE 0 
         END as rd,
-        
-        -- URD - (unique_redep_count / deps) * 100%
         CASE 
           WHEN SUM(COALESCE(fs.verified_deps, fs.deps)) > 0 
           THEN ROUND((SUM(fs.unique_redep_count)::numeric / SUM(COALESCE(fs.verified_deps, fs.deps)) * 100)::numeric, 2)
           ELSE 0 
         END as urd,
-        
-        -- CPD - spend / deps
         CASE 
           WHEN SUM(COALESCE(fs.verified_deps, fs.deps)) > 0 
           THEN ROUND((SUM(fs.spend)::numeric / SUM(COALESCE(fs.verified_deps, fs.deps)))::numeric, 2)
@@ -3650,10 +3636,11 @@ const getCompanyFlowsMonthlyStats = async (
 
     const result = await db.query(flowsQuery, [month, year]);
 
-    // ДОДАНО: Розрахунок прибутку для кожного потоку
+    // ОНОВЛЕНО: Розрахунок прибутку з новою логікою
     const flowsWithProfit = await Promise.all(
       result.rows.map(async (row) => {
         let profit = 0;
+        let spendMultiplier = 0;
 
         if (row.flow_type === "cpa") {
           // CPA модель: verified_deps (або deps) * cpa
@@ -3661,20 +3648,16 @@ const getCompanyFlowsMonthlyStats = async (
             parseInt(row.total_verified_deps) || parseInt(row.total_deps) || 0;
           profit = depsForCalculation * (parseFloat(row.flow_cpa) || 0);
         } else if (row.flow_type === "spend") {
-          // SPEND модель: розрахунок KPI для потоку команди
-          const monthlyKpi = await calculateMonthlyKPI(
+          // SPEND модель: використовуємо новий метод calculateSpendMultiplier
+          spendMultiplier = await calculateSpendMultiplier(
             row.flow_id,
-            row.kpi_metric,
             month,
             year,
-            undefined, // не фільтруємо по користувачу для команди
+            row.kpi_target_value,
+            row.spend_percentage_ranges,
+            undefined, // не фільтруємо по користувачу для компанії
             user_role,
             requesting_user_id
-          );
-
-          const spendMultiplier = findSpendMultiplier(
-            monthlyKpi,
-            row.spend_percentage_ranges
           );
 
           profit = parseFloat(row.total_spend) * spendMultiplier;
@@ -3683,29 +3666,18 @@ const getCompanyFlowsMonthlyStats = async (
         return {
           ...row,
           profit: Math.round(profit * 100) / 100,
-          monthly_kpi:
-            row.flow_type === "spend"
-              ? await calculateMonthlyKPI(
-                  row.flow_id,
-                  row.kpi_metric,
-                  month,
-                  year,
-                  undefined,
-                  user_role,
-                  requesting_user_id
-                )
-              : undefined,
+          spend_multiplier: spendMultiplier, // Для інформації
         };
       })
     );
 
-    // ОНОВЛЕНО: Загальна статистика команди за місяць з новими полями
-    const teamSummaryQuery = `
+    // Загальна статистика компанії за місяць
+    const companySummaryQuery = `
       SELECT 
-        t.name as team_name,
         COUNT(DISTINCT f.id) as total_flows,
         COUNT(DISTINCT f.id) FILTER (WHERE fs.id IS NOT NULL) as flows_with_activity,
         COUNT(DISTINCT fs.user_id) as total_active_users,
+        COUNT(DISTINCT t.id) as total_teams,
         COALESCE(SUM(fs.spend), 0) as total_spend,
         COALESCE(SUM(fs.installs), 0) as total_installs,
         COALESCE(SUM(fs.regs), 0) as total_regs,
@@ -3717,22 +3689,18 @@ const getCompanyFlowsMonthlyStats = async (
         COUNT(DISTINCT o.partner_id) as unique_partners,
         COUNT(DISTINCT o.id) as unique_offers,
         COUNT(DISTINCT f.geo_id) as unique_geos
-      FROM teams t
-      LEFT JOIN flows f ON t.id = f.team_id
+      FROM flows f
+      LEFT JOIN teams t ON f.team_id = t.id
       LEFT JOIN offers o ON f.offer_id = o.id
       LEFT JOIN flow_stats fs ON f.id = fs.flow_id 
         AND fs.month = $1 AND fs.year = $2
-        GROUP BY t.id, t.name
+      WHERE f.status = 'active'
     `;
 
-    const summaryResult = await db.query(teamSummaryQuery, [month, year]);
+    const summaryResult = await db.query(companySummaryQuery, [month, year]);
     const summary = summaryResult.rows[0];
 
-    if (!summary) {
-      throw new Error("Команду не знайдено");
-    }
-
-    // Форматуємо результат з новими полями та прибутком
+    // Форматуємо результат
     const flows = flowsWithProfit.map((row) => ({
       flow: {
         id: row.flow_id,
@@ -3782,33 +3750,33 @@ const getCompanyFlowsMonthlyStats = async (
         avg_cpa: parseFloat(row.avg_cpa) || 0,
         days_with_stats: parseInt(row.days_with_stats) || 0,
         active_users_count: parseInt(row.active_users_count) || 0,
-        // Існуючі метрики (ROI тепер через прибуток)
+        // ВИПРАВЛЕНО: ROI тепер розраховується правильно
         roi:
           parseFloat(row.total_spend) > 0
             ? Math.round(
-                (row.profit / parseFloat(row.total_spend)) * 100 * 100
-              ) /
-                100 -
-              100
+                ((row.profit - parseFloat(row.total_spend)) /
+                  parseFloat(row.total_spend)) *
+                  100 *
+                  100
+              ) / 100
             : 0,
         inst2reg: parseFloat(row.inst2reg) || 0,
         reg2dep: parseFloat(row.reg2dep) || 0,
         verification_rate: parseFloat(row.verification_rate) || 0,
-        // ДОДАНО: Нові метрики
         oas: parseFloat(row.oas) || 0,
         rd: parseFloat(row.rd) || 0,
         urd: parseFloat(row.urd) || 0,
         cpd: parseFloat(row.cpd) || 0,
-        // ДОДАНО: Прибуток
         profit: parseFloat(row.profit) || 0,
         // Додаткова інформація для spend моделі
-        monthly_kpi: parseFloat(row.monthly_kpi) || undefined,
+        spend_multiplier:
+          row.flow_type === "spend" ? row.spend_multiplier : undefined,
         has_activity: row.has_activity,
         top_user_username: row.top_user_username,
       },
     }));
 
-    // Обчислюємо загальні метрики з новими полями та прибутком
+    // Обчислюємо загальні метрики
     const totalMetrics = {
       spend: parseFloat(summary.total_spend) || 0,
       installs: parseInt(summary.total_installs) || 0,
@@ -3818,11 +3786,9 @@ const getCompanyFlowsMonthlyStats = async (
       deposit_amount: parseFloat(summary.total_deposit_amount) || 0,
       redep_count: parseInt(summary.total_redep_count) || 0,
       unique_redep_count: parseInt(summary.total_unique_redep_count) || 0,
-      // ДОДАНО: Загальний прибуток
       total_profit: flows.reduce((sum, flow) => sum + flow.stats.profit, 0),
     };
 
-    // Використовуємо verified_deps або deps для розрахунків
     const depsForCalculation =
       totalMetrics.verified_deps > 0
         ? totalMetrics.verified_deps
@@ -3835,19 +3801,21 @@ const getCompanyFlowsMonthlyStats = async (
         total_flows: parseInt(summary.total_flows) || 0,
         flows_with_activity: parseInt(summary.flows_with_activity) || 0,
         total_active_users: parseInt(summary.total_active_users) || 0,
+        total_teams: parseInt(summary.total_teams) || 0,
         unique_partners: parseInt(summary.unique_partners) || 0,
         unique_offers: parseInt(summary.unique_offers) || 0,
         unique_geos: parseInt(summary.unique_geos) || 0,
         metrics: totalMetrics,
         calculated: {
-          // Існуючі метрики (ROI тепер через прибуток)
+          // ВИПРАВЛЕНО: ROI через правильну формулу
           total_roi:
             totalMetrics.spend > 0
               ? Math.round(
-                  (totalMetrics.total_profit / totalMetrics.spend) * 100 * 100
-                ) /
-                  100 -
-                100
+                  ((totalMetrics.total_profit - totalMetrics.spend) /
+                    totalMetrics.spend) *
+                    100 *
+                    100
+                ) / 100
               : 0,
           avg_inst2reg:
             totalMetrics.installs > 0
@@ -3867,7 +3835,6 @@ const getCompanyFlowsMonthlyStats = async (
                   (totalMetrics.verified_deps / totalMetrics.deps) * 100 * 100
                 ) / 100
               : 0,
-          // ДОДАНО: Нові загальні метрики
           avg_oas:
             totalMetrics.spend > 0
               ? Math.round(
@@ -3897,14 +3864,14 @@ const getCompanyFlowsMonthlyStats = async (
       },
     };
   } catch (error) {
-    console.error("Помилка в getTeamFlowsMonthlyStats:", error);
-    throw new Error(`Помилка отримання потоків команди: ${error.message}`);
+    console.error("Помилка в getCompanyFlowsMonthlyStats:", error);
+    throw new Error(`Помилка отримання потоків компанії: ${error.message}`);
   }
 };
 
 /**
- * ВИПРАВЛЕНО: Отримання загальної статистики компанії за місяць (P/L) з коректним розрахунком прибутку
- * ДОДАНО: нові метрики OAS, RD, URD, CPD та правильний розрахунок для CPA/SPEND моделей
+ * ОНОВЛЕНО: Отримання загальної статистики компанії за місяць (P/L) з новою логікою прибутку
+ * Використовує calculateSpendMultiplier для SPEND потоків
  * @param {Object} options - Опції фільтрації
  * @param {number} options.month - Місяць (1-12)
  * @param {number} options.year - Рік
@@ -3918,7 +3885,7 @@ const getCompanyMonthlyStats = async (options = {}) => {
   }
 
   try {
-    // ВИПРАВЛЕНО: Спочатку отримуємо агреговану статистику БЕЗ прибутку (для швидкості)
+    // Агрегована статистика компанії
     const companyStatsQuery = `
       SELECT 
         -- Основні метрики
@@ -3943,7 +3910,7 @@ const getCompanyMonthlyStats = async (options = {}) => {
         COUNT(DISTINCT f.geo_id) as total_geos,
         COUNT(fs.id) as total_stats_entries,
         
-        -- ДОДАНО: Нові обчислювані метрики
+        -- Нові обчислювані метрики
         CASE 
           WHEN SUM(fs.spend) > 0 
           THEN ROUND((SUM(fs.deposit_amount)::numeric / SUM(fs.spend) * 100)::numeric, 2)
@@ -3984,7 +3951,7 @@ const getCompanyMonthlyStats = async (options = {}) => {
         AND fs.month = $1 AND fs.year = $2
     `;
 
-    // ВИПРАВЛЕНО: Окремий запит для отримання агрегованих даних по потоках (без дублювання)
+    // Агрегати по потоках
     const flowAggregatesQuery = `
       SELECT 
         f.id as flow_id,
@@ -4018,21 +3985,23 @@ const getCompanyMonthlyStats = async (options = {}) => {
       `Обробляємо ${flowAggregates.length} потоків для розрахунку прибутку`
     );
 
-    // ВИПРАВЛЕНО: Розрахунок KPI тільки для spend потоків
+    // ОНОВЛЕНО: Розрахунок множників для spend потоків
     const spendFlows = flowAggregates.filter((f) => f.flow_type === "spend");
-    const monthlyKpiCache = {};
+    const spendMultiplierCache = {};
 
-    console.log(`Розраховуємо KPI для ${spendFlows.length} spend потоків...`);
+    console.log(
+      `Розраховуємо множники для ${spendFlows.length} spend потоків...`
+    );
 
-    // Паралельний розрахунок KPI для spend потоків
     if (spendFlows.length > 0) {
-      const kpiPromises = spendFlows.map(async (flow) => {
+      const multiplierPromises = spendFlows.map(async (flow) => {
         try {
-          const monthlyKpi = await calculateMonthlyKPI(
+          const multiplier = await calculateSpendMultiplier(
             flow.flow_id,
-            flow.kpi_metric,
             month,
             year,
+            flow.kpi_target_value,
+            flow.spend_percentage_ranges,
             undefined, // не фільтруємо по користувачу
             "admin", // admin роль для доступу до всіх даних
             null
@@ -4040,32 +4009,25 @@ const getCompanyMonthlyStats = async (options = {}) => {
 
           return {
             flowId: flow.flow_id,
-            kpi: monthlyKpi,
-            multiplier: findSpendMultiplier(
-              monthlyKpi,
-              flow.spend_percentage_ranges
-            ),
+            multiplier: multiplier,
           };
         } catch (error) {
           console.error(
-            `Помилка розрахунку KPI для потоку ${flow.flow_id}:`,
+            `Помилка розрахунку множника для потоку ${flow.flow_id}:`,
             error
           );
-          return { flowId: flow.flow_id, kpi: 0, multiplier: 0 };
+          return { flowId: flow.flow_id, multiplier: 0 };
         }
       });
 
-      const kpiResults = await Promise.all(kpiPromises);
+      const multiplierResults = await Promise.all(multiplierPromises);
 
-      kpiResults.forEach((result) => {
-        monthlyKpiCache[result.flowId] = {
-          kpi: result.kpi,
-          multiplier: result.multiplier,
-        };
+      multiplierResults.forEach((result) => {
+        spendMultiplierCache[result.flowId] = result.multiplier;
       });
     }
 
-    // ВИПРАВЛЕНО: Правильний розрахунок прибутку один раз
+    // ОНОВЛЕНО: Правильний розрахунок прибутку
     let totalRevenue = 0;
     let totalProfit = 0;
 
@@ -4085,11 +4047,9 @@ const getCompanyMonthlyStats = async (options = {}) => {
         const cpa = parseFloat(flow.flow_avg_cpa) || 0;
         flowRevenue = depsForCalculation * cpa;
       } else if (flow.flow_type === "spend") {
-        // SPEND модель
-        const cached = monthlyKpiCache[flow.flow_id];
-        if (cached && cached.multiplier > 0) {
-          flowRevenue = flowSpend * cached.multiplier;
-        }
+        // SPEND модель - використовуємо кешований множник
+        const multiplier = spendMultiplierCache[flow.flow_id] || 0;
+        flowRevenue = flowSpend * multiplier;
       }
 
       const flowProfit = flowRevenue - flowSpend;
@@ -4114,15 +4074,7 @@ const getCompanyMonthlyStats = async (options = {}) => {
       )}, revenue=${totalRevenue}, profit=${totalProfit}`
     );
 
-    // Перевірка математики
-    const expectedProfit = totalRevenue - parseFloat(companyStats.total_spend);
-    if (Math.abs(totalProfit - expectedProfit) > 0.01) {
-      console.warn(
-        `УВАГА: Розбіжність в розрахунках прибутку! Розраховано: ${totalProfit}, Очікувано: ${expectedProfit}`
-      );
-    }
-
-    // ВИПРАВЛЕНО: Статистика по командах з правильною агрегацією
+    // Статистика по командах
     const teamsStatsQuery = `
       SELECT 
         t.id as team_id,
@@ -4136,7 +4088,7 @@ const getCompanyMonthlyStats = async (options = {}) => {
         COALESCE(SUM(fs.redep_count), 0) as team_redep_count,
         COALESCE(SUM(fs.unique_redep_count), 0) as team_unique_redep_count,
         
-        -- ДОДАНО: Нові метрики для команд
+        -- Нові метрики для команд
         CASE 
           WHEN SUM(fs.spend) > 0 
           THEN ROUND((SUM(fs.deposit_amount)::numeric / SUM(fs.spend) * 100)::numeric, 2)
@@ -4167,7 +4119,7 @@ const getCompanyMonthlyStats = async (options = {}) => {
       ORDER BY team_spend DESC
     `;
 
-    // Аналогічно для партнерів
+    // Партнери
     const partnersStatsQuery = `
       SELECT 
         p.id as partner_id,
@@ -4182,7 +4134,6 @@ const getCompanyMonthlyStats = async (options = {}) => {
         COALESCE(SUM(fs.redep_count), 0) as partner_redep_count,
         COALESCE(SUM(fs.unique_redep_count), 0) as partner_unique_redep_count,
         
-        -- ДОДАНО: Нові метрики
         CASE 
           WHEN SUM(fs.spend) > 0 
           THEN ROUND((SUM(fs.deposit_amount)::numeric / SUM(fs.spend) * 100)::numeric, 2)
@@ -4231,7 +4182,6 @@ const getCompanyMonthlyStats = async (options = {}) => {
         COALESCE(SUM(fs.redep_count), 0) as user_redep_count,
         COALESCE(SUM(fs.unique_redep_count), 0) as user_unique_redep_count,
         
-        -- ДОДАНО: Нові метрики
         CASE 
           WHEN SUM(fs.spend) > 0 
           THEN ROUND((SUM(fs.deposit_amount)::numeric / SUM(fs.spend) * 100)::numeric, 2)
@@ -4264,7 +4214,7 @@ const getCompanyMonthlyStats = async (options = {}) => {
       LIMIT 10
     `;
 
-    // Денна статистика (спрощена без json_agg)
+    // Денна статистика
     const dailyTrendsQuery = `
       SELECT 
         fs.day,
@@ -4279,7 +4229,6 @@ const getCompanyMonthlyStats = async (options = {}) => {
         COUNT(DISTINCT fs.flow_id) as active_flows,
         COUNT(DISTINCT fs.user_id) as active_users,
         
-        -- ДОДАНО: Нові метрики
         CASE 
           WHEN SUM(fs.spend) > 0 
           THEN ROUND((SUM(fs.deposit_amount)::numeric / SUM(fs.spend) * 100)::numeric, 2)
@@ -4317,21 +4266,7 @@ const getCompanyMonthlyStats = async (options = {}) => {
         db.query(dailyTrendsQuery, [month, year]),
       ]);
 
-    // ВИПРАВЛЕНО: Функція для розрахунку прибутку команд/партнерів/користувачів
-    const calculateEntityProfit = (entityFlows) => {
-      let entityRevenue = 0;
-      let entityProfit = 0;
-
-      // Знаходимо потоки цієї сутності в наших агрегатах
-      const entityFlowIds = new Set(); // Тут ми би отримали ID потоків сутності, але це складно з поточними запитами
-
-      // Спрощений розрахунок базуючись на CPA (для демонстрації логіки)
-      // В реальності тут потрібно було б зробити додаткові запити або переписати основні запити
-
-      return { revenue: entityRevenue, profit: entityProfit };
-    };
-
-    // СПРОЩЕНО: Розрахунок прибутку для розбивок через пропорції від загального прибутку
+    // Розрахунок прибутку для розбивок через пропорції
     const totalSpend = parseFloat(companyStats.total_spend) || 0;
 
     const calculateProportionalProfit = (entitySpend) => {
@@ -4354,6 +4289,7 @@ const getCompanyMonthlyStats = async (options = {}) => {
     const teams = teamsResult.rows.map((row) => {
       const { revenue: teamRevenue, profit: teamProfit } =
         calculateProportionalProfit(parseFloat(row.team_spend) || 0);
+      const teamSpend = parseFloat(row.team_spend) || 0;
 
       return {
         team_id: row.team_id,
@@ -4361,7 +4297,7 @@ const getCompanyMonthlyStats = async (options = {}) => {
         flows: parseInt(row.team_flows) || 0,
         users: parseInt(row.team_users) || 0,
         metrics: {
-          spend: parseFloat(row.team_spend) || 0,
+          spend: teamSpend,
           deps: parseInt(row.team_deps) || 0,
           verified_deps: parseInt(row.team_verified_deps) || 0,
           deposit_amount: parseFloat(row.team_deposit_amount) || 0,
@@ -4370,10 +4306,8 @@ const getCompanyMonthlyStats = async (options = {}) => {
           revenue: teamRevenue,
           profit: teamProfit,
           roi:
-            parseFloat(row.team_spend) > 0
-              ? Math.round(
-                  (teamProfit / parseFloat(row.team_spend)) * 100 * 100
-                ) / 100
+            teamSpend > 0
+              ? Math.round((teamProfit / teamSpend) * 100 * 100) / 100
               : 0,
           oas: parseFloat(row.team_oas) || 0,
           rd: parseFloat(row.team_rd) || 0,
@@ -4386,6 +4320,7 @@ const getCompanyMonthlyStats = async (options = {}) => {
     const partners = partnersResult.rows.map((row) => {
       const { revenue: partnerRevenue, profit: partnerProfit } =
         calculateProportionalProfit(parseFloat(row.partner_spend) || 0);
+      const partnerSpend = parseFloat(row.partner_spend) || 0;
 
       return {
         partner_id: row.partner_id,
@@ -4394,7 +4329,7 @@ const getCompanyMonthlyStats = async (options = {}) => {
         flows: parseInt(row.partner_flows) || 0,
         offers: parseInt(row.partner_offers) || 0,
         metrics: {
-          spend: parseFloat(row.partner_spend) || 0,
+          spend: partnerSpend,
           deps: parseInt(row.partner_deps) || 0,
           verified_deps: parseInt(row.partner_verified_deps) || 0,
           deposit_amount: parseFloat(row.partner_deposit_amount) || 0,
@@ -4403,10 +4338,8 @@ const getCompanyMonthlyStats = async (options = {}) => {
           revenue: partnerRevenue,
           profit: partnerProfit,
           roi:
-            parseFloat(row.partner_spend) > 0
-              ? Math.round(
-                  (partnerProfit / parseFloat(row.partner_spend)) * 100 * 100
-                ) / 100
+            partnerSpend > 0
+              ? Math.round((partnerProfit / partnerSpend) * 100 * 100) / 100
               : 0,
           oas: parseFloat(row.partner_oas) || 0,
           rd: parseFloat(row.partner_rd) || 0,
@@ -4419,6 +4352,7 @@ const getCompanyMonthlyStats = async (options = {}) => {
     const topUsers = topUsersResult.rows.map((row) => {
       const { revenue: userRevenue, profit: userProfit } =
         calculateProportionalProfit(parseFloat(row.user_spend) || 0);
+      const userSpend = parseFloat(row.user_spend) || 0;
 
       return {
         user_id: row.user_id,
@@ -4430,7 +4364,7 @@ const getCompanyMonthlyStats = async (options = {}) => {
         team_name: row.team_name,
         flows: parseInt(row.user_flows) || 0,
         metrics: {
-          spend: parseFloat(row.user_spend) || 0,
+          spend: userSpend,
           deps: parseInt(row.user_deps) || 0,
           verified_deps: parseInt(row.user_verified_deps) || 0,
           deposit_amount: parseFloat(row.user_deposit_amount) || 0,
@@ -4439,10 +4373,8 @@ const getCompanyMonthlyStats = async (options = {}) => {
           revenue: userRevenue,
           profit: userProfit,
           roi:
-            parseFloat(row.user_spend) > 0
-              ? Math.round(
-                  (userProfit / parseFloat(row.user_spend)) * 100 * 100
-                ) / 100
+            userSpend > 0
+              ? Math.round((userProfit / userSpend) * 100 * 100) / 100
               : 0,
           oas: parseFloat(row.user_oas) || 0,
           rd: parseFloat(row.user_rd) || 0,
@@ -4452,7 +4384,7 @@ const getCompanyMonthlyStats = async (options = {}) => {
       };
     });
 
-    // ВИПРАВЛЕНО: Денні тренди зі спрощеним розрахунком прибутку
+    // Денні тренди
     const dailyTrends = dailyTrendsResult.rows.map((row) => {
       const { revenue: dayRevenue, profit: dayProfit } =
         calculateProportionalProfit(parseFloat(row.day_spend) || 0);
@@ -4493,7 +4425,7 @@ const getCompanyMonthlyStats = async (options = {}) => {
     return {
       period: { month, year },
       summary: {
-        // ВИПРАВЛЕНО: Коректні фінансові показники
+        // Коректні фінансові показники
         total_spend: totalSpend,
         total_revenue: totalRevenue,
         total_profit: totalProfit,
@@ -4616,13 +4548,13 @@ const getCompanyMonthlyStats = async (options = {}) => {
             : "no_data",
       },
 
-      // Додаткова інформація про розрахунки
+      // Інформація про розрахунки
       debug: {
         flows_processed: flowAggregates.length,
         cpa_flows: flowAggregates.filter((f) => f.flow_type === "cpa").length,
         spend_flows: spendFlows.length,
-        spend_flows_with_kpi: Object.keys(monthlyKpiCache).length,
-        calculation_method: "fixed_aggregation_method",
+        spend_flows_with_multiplier: Object.keys(spendMultiplierCache).length,
+        calculation_method: "fixed_aggregation_method_v2",
       },
     };
   } catch (error) {
@@ -4633,7 +4565,7 @@ const getCompanyMonthlyStats = async (options = {}) => {
 
 /**
  * ОНОВЛЕНО: Отримання агрегованої статистики за період з урахуванням user_id
- * ДОДАНО: нові метрики OAS, RD, URD, CPD та розрахунок прибутку
+ * ДОДАНО: розрахунок прибутку з новою логікою для SPEND потоків
  * @param {number} flow_id - ID потоку
  * @param {Object} options - Опції фільтрації та групування
  * @param {number} requesting_user_id - ID користувача, що робить запит
@@ -4648,7 +4580,7 @@ const getAggregatedStats = async (
 ) => {
   const { month, year, dateFrom, dateTo, user_id } = options;
 
-  // ДОДАНО: Отримуємо дані про потік для розрахунку прибутку
+  // Отримуємо дані про потік для розрахунку прибутку
   const flowQuery = `
     SELECT 
       flow_type,
@@ -4669,7 +4601,10 @@ const getAggregatedStats = async (
     // Buyer бачить лише свою статистику
     conditions.push(`fs.user_id = $${paramIndex++}`);
     params.push(requesting_user_id);
-  } else if (user_id && ["admin", "bizdev", "teamlead"].includes(user_role)) {
+  } else if (
+    user_id &&
+    ["admin", "bizdev", "teamlead", "affiliate_manager"].includes(user_role)
+  ) {
     // Інші ролі можуть фільтрувати по конкретному користувачу
     conditions.push(`fs.user_id = $${paramIndex++}`);
     params.push(user_id);
@@ -4702,7 +4637,7 @@ const getAggregatedStats = async (
     params.push(toDate.toISOString().split("T")[0]);
   }
 
-  // ОНОВЛЕНО: запит з новими полями та метриками
+  // Запит з метриками (OAS залишаємо для всіх типів потоків, RD/URD/CPD тільки для CPA)
   const query = `
     SELECT 
       COUNT(*) as total_days,
@@ -4717,7 +4652,7 @@ const getAggregatedStats = async (
       SUM(fs.unique_redep_count) as total_unique_redep_count,
       AVG(fs.cpa) as avg_cpa,
       
-      -- Існуючі агреговані метрики
+      -- Базові метрики
       CASE 
         WHEN SUM(fs.spend) > 0 THEN ROUND(((SUM(fs.deps * fs.cpa) - SUM(fs.spend)) / SUM(fs.spend) * 100)::numeric, 2)
         ELSE 0 
@@ -4735,26 +4670,23 @@ const getAggregatedStats = async (
         ELSE 0 
       END as verification_rate,
       
-      -- ДОДАНО: Нові агреговані метрики
-      -- OAS - (deposit_amount / spend) * 100%
+      -- OAS - використовується для всіх типів потоків
       CASE 
         WHEN SUM(fs.spend) > 0 THEN ROUND((SUM(fs.deposit_amount)::numeric / SUM(fs.spend) * 100)::numeric, 2)
         ELSE 0 
       END as total_oas,
       
-      -- RD - (redep_count / deps) * 100% (використовуємо verified_deps або deps)
+      -- RD, URD, CPD - використовуються тільки для CPA потоків
       CASE 
         WHEN SUM(COALESCE(fs.verified_deps, fs.deps)) > 0 THEN ROUND((SUM(fs.redep_count)::numeric / SUM(COALESCE(fs.verified_deps, fs.deps)) * 100)::numeric, 2)
         ELSE 0 
       END as total_rd,
       
-      -- URD - (unique_redep_count / deps) * 100%
       CASE 
         WHEN SUM(COALESCE(fs.verified_deps, fs.deps)) > 0 THEN ROUND((SUM(fs.unique_redep_count)::numeric / SUM(COALESCE(fs.verified_deps, fs.deps)) * 100)::numeric, 2)
         ELSE 0 
       END as total_urd,
       
-      -- CPD - spend / deps
       CASE 
         WHEN SUM(COALESCE(fs.verified_deps, fs.deps)) > 0 THEN ROUND((SUM(fs.spend)::numeric / SUM(COALESCE(fs.verified_deps, fs.deps)))::numeric, 2)
         ELSE 0 
@@ -4768,7 +4700,7 @@ const getAggregatedStats = async (
       MIN(fs.deps) FILTER (WHERE fs.deps > 0) as min_daily_deps,
       MAX(fs.deps) as max_daily_deps,
       
-      -- ДОДАНО: Отримуємо унікальні комбінації місяць/рік для розрахунку прибутку
+      -- Отримуємо унікальні комбінації місяць/рік для розрахунку прибутку
       array_agg(DISTINCT fs.year || '-' || fs.month) as unique_periods
       
     FROM flow_stats fs
@@ -4787,7 +4719,7 @@ const getAggregatedStats = async (
     const result = await db.query(query, params);
     const stats = result.rows[0];
 
-    // ДОДАНО: Розрахунок загального прибутку
+    // Розрахунок загального прибутку
     let totalProfit = 0;
 
     if (flowData.flow_type === "cpa") {
@@ -4796,7 +4728,7 @@ const getAggregatedStats = async (
         parseInt(stats.total_verified_deps) || parseInt(stats.total_deps) || 0;
       totalProfit = totalDepsForCalculation * (flowData.cpa || 0);
     } else if (flowData.flow_type === "spend") {
-      // SPEND модель: потрібно розрахувати для кожного унікального періоду
+      // SPEND модель: використовуємо нову логіку з calculateSpendMultiplier
       const uniquePeriods = stats.unique_periods || [];
 
       if (uniquePeriods.length > 0) {
@@ -4813,21 +4745,17 @@ const getAggregatedStats = async (
 
         const periodResult = await db.query(periodQuery, params);
 
-        // Розраховуємо прибуток для кожного періоду
+        // Розраховуємо прибуток для кожного періоду використовуючи новий метод
         for (const periodRow of periodResult.rows) {
-          const monthlyKpi = await calculateMonthlyKPI(
+          const spendMultiplier = await calculateSpendMultiplier(
             flow_id,
-            flowData.kpi_metric,
             periodRow.month,
             periodRow.year,
+            flowData.kpi_target_value,
+            flowData.spend_percentage_ranges,
             user_id,
             user_role,
             requesting_user_id
-          );
-
-          const spendMultiplier = findSpendMultiplier(
-            monthlyKpi,
-            flowData.spend_percentage_ranges
           );
 
           totalProfit += periodRow.period_spend * spendMultiplier;
@@ -4835,17 +4763,19 @@ const getAggregatedStats = async (
       }
     }
 
-    // ДОДАНО: Перерахунок ROI через прибуток
+    // Перерахунок ROI через прибуток
     const calculatedRoi =
       parseFloat(stats.total_spend) > 0
         ? Math.round(
-            (totalProfit / parseFloat(stats.total_spend)) * 100 * 100
-          ) /
-            100 -
-          100
+            ((totalProfit - parseFloat(stats.total_spend)) /
+              parseFloat(stats.total_spend)) *
+              100 *
+              100
+          ) / 100
         : 0;
 
-    return {
+    // Формуємо результат
+    const aggregatedResult = {
       flow_id,
       period: { month, year, dateFrom, dateTo },
       user_filter: user_id,
@@ -4867,19 +4797,16 @@ const getAggregatedStats = async (
         total_unique_redep_count: parseInt(stats.total_unique_redep_count) || 0,
         avg_cpa: parseFloat(stats.avg_cpa) || 0,
 
-        // Існуючі метрики
-        total_roi: calculatedRoi, // ЗМІНЕНО: тепер через прибуток
+        // Базові метрики
+        total_roi: calculatedRoi, // Розраховується через прибуток
         total_inst2reg: parseFloat(stats.total_inst2reg) || 0,
         total_reg2dep: parseFloat(stats.total_reg2dep) || 0,
         verification_rate: parseFloat(stats.verification_rate) || 0,
 
-        // ДОДАНО: Нові метрики
+        // OAS - для всіх типів потоків
         total_oas: parseFloat(stats.total_oas) || 0,
-        total_rd: parseFloat(stats.total_rd) || 0,
-        total_urd: parseFloat(stats.total_urd) || 0,
-        total_cpd: parseFloat(stats.total_cpd) || 0,
 
-        // ДОДАНО: Прибуток
+        // Прибуток
         total_profit: Math.round(totalProfit * 100) / 100,
 
         // Мін/макс значення
@@ -4891,6 +4818,15 @@ const getAggregatedStats = async (
         max_daily_deps: parseInt(stats.max_daily_deps) || 0,
       },
     };
+
+    // Додаємо RD, URD, CPD тільки для CPA потоків
+    if (flowData.flow_type === "cpa") {
+      aggregatedResult.aggregated.total_rd = parseFloat(stats.total_rd) || 0;
+      aggregatedResult.aggregated.total_urd = parseFloat(stats.total_urd) || 0;
+      aggregatedResult.aggregated.total_cpd = parseFloat(stats.total_cpd) || 0;
+    }
+
+    return aggregatedResult;
   } catch (error) {
     console.error("Помилка при отриманні агрегованої статистики:", error);
     throw error;
