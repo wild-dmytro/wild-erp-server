@@ -61,7 +61,7 @@ const upsertFlowStat = async (data) => {
   // Перевіряємо, що користувач належить до потоку
   const userFlowCheck = await db.query(
     `SELECT 1 FROM flow_users 
-     WHERE flow_id = $1 AND user_id = $2 AND status = 'active'`,
+     WHERE flow_id = $1 AND user_id = $2`,
     [flow_id, user_id]
   );
 

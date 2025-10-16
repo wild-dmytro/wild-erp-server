@@ -596,15 +596,15 @@ const updateFlow = async (id, flowData) => {
     values.push(is_active);
   }
 
-  if (start_date !== undefined) {
-    setClauses.push(`start_date = $${paramIndex++}`);
-    values.push(start_date);
-  }
+  // if (start_date !== undefined) {
+  //   setClauses.push(`start_date = $${paramIndex++}`);
+  //   values.push(start_date);
+  // }
 
-  if (stop_date !== undefined) {
-    setClauses.push(`stop_date = $${paramIndex++}`);
-    values.push(stop_date);
-  }
+  // if (stop_date !== undefined) {
+  //   setClauses.push(`stop_date = $${paramIndex++}`);
+  //   values.push(stop_date);
+  // }
 
   if (conditions !== undefined) {
     setClauses.push(`conditions = $${paramIndex++}`);
