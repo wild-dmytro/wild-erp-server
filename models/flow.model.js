@@ -517,6 +517,7 @@ const updateFlow = async (id, flowData) => {
     kpi,
     landings,
     updated_by,
+    users,
   } = flowData;
 
   const setClauses = [];
@@ -657,6 +658,41 @@ const updateFlow = async (id, flowData) => {
   values.push(id);
 
   const result = await db.query(query, values);
+
+  // Оновлюємо зв'язки, якщо вони передані
+  if (users !== undefined) {
+    if (users.length > 0) {
+      const userIds = users.map((elem) => elem.user_id);
+
+      // Отримуємо ID користувачів, які вже існують
+      const existingResult = await db.query(
+        `SELECT user_id FROM flow_users WHERE flow_id = $1 AND user_id = ANY($2)`,
+        [id, userIds]
+      );
+
+      const existingUserIds = new Set(
+        existingResult.rows.map((row) => row.user_id)
+      );
+
+      // Фільтруємо тільки нових користувачів
+      const newUserIds = userIds.filter(
+        (userId) => !existingUserIds.has(userId)
+      );
+
+      if (newUserIds.length > 0) {
+        const userValues = newUserIds
+          .map((userId, index) => `($1, $${index + 2})`)
+          .join(", ");
+        const userParams = [id, ...newUserIds];
+
+        await db.query(
+          `INSERT INTO flow_users (flow_id, user_id) VALUES ${userValues}`,
+          userParams
+        );
+      }
+    }
+  }
+
   return result.rows.length > 0 ? result.rows[0] : null;
 };
 

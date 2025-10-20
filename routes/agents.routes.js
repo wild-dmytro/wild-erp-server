@@ -1,9 +1,9 @@
-const express = require('express');
+const express = require("express");
 const router = express.Router();
-const agentsController = require('../controllers/agents.controller');
-const authMiddleware = require('../middleware/auth.middleware');
-const roleMiddleware = require('../middleware/role.middleware');
-const { check } = require('express-validator');
+const agentsController = require("../controllers/agents.controller");
+const authMiddleware = require("../middleware/auth.middleware");
+const roleMiddleware = require("../middleware/role.middleware");
+const { check } = require("express-validator");
 
 // Застосовуємо middleware авторизації до всіх маршрутів
 router.use(authMiddleware);
@@ -13,10 +13,7 @@ router.use(authMiddleware);
  * @desc    Отримання списку всіх агентів з фільтрацією та пагінацією
  * @access  Private
  */
-router.get(
-  '/',
-  agentsController.getAllAgents
-);
+router.get("/", agentsController.getAllAgents);
 
 /**
  * @route   GET /api/agents/stats
@@ -24,8 +21,8 @@ router.get(
  * @access  Private/Admin/Finance
  */
 router.get(
-  '/stats',
-  roleMiddleware('admin', 'finance_manager', 'teamlead'),
+  "/stats",
+  roleMiddleware("admin", "finance_manager", "teamlead"),
   agentsController.getAgentsStats
 );
 
@@ -34,10 +31,7 @@ router.get(
  * @desc    Отримання детальної інформації про агента за ID
  * @access  Private
  */
-router.get(
-  '/:id',
-  agentsController.getAgentById
-);
+router.get("/:id", agentsController.getAgentById);
 
 /**
  * @route   POST /api/agents
@@ -45,13 +39,15 @@ router.get(
  * @access  Private/Admin/Finance
  */
 router.post(
-  '/',
-  roleMiddleware('admin', 'finance_manager'),
+  "/",
+  roleMiddleware("admin", "finance_manager", "teamlead"),
   [
-    check('name', 'Назва агента є обов\'язковою').notEmpty(),
-    check('name', 'Назва агента має бути рядком').isString(),
-    check('fee', 'Комісія має бути числом').optional().isNumeric(),
-    check('is_active', 'Активність має бути булевим значенням').optional().isBoolean()
+    check("name", "Назва агента є обов'язковою").notEmpty(),
+    check("name", "Назва агента має бути рядком").isString(),
+    check("fee", "Комісія має бути числом").optional().isNumeric(),
+    check("is_active", "Активність має бути булевим значенням")
+      .optional()
+      .isBoolean(),
   ],
   agentsController.createAgent
 );
@@ -62,12 +58,14 @@ router.post(
  * @access  Private/Admin/Finance
  */
 router.put(
-  '/:id',
-  roleMiddleware('admin', 'finance_manager'),
+  "/:id",
+  roleMiddleware("admin", "finance_manager"),
   [
-    check('name', 'Назва агента має бути рядком').optional().isString(),
-    check('fee', 'Комісія має бути числом').optional().isNumeric(),
-    check('is_active', 'Активність має бути булевим значенням').optional().isBoolean()
+    check("name", "Назва агента має бути рядком").optional().isString(),
+    check("fee", "Комісія має бути числом").optional().isNumeric(),
+    check("is_active", "Активність має бути булевим значенням")
+      .optional()
+      .isBoolean(),
   ],
   agentsController.updateAgent
 );
@@ -78,11 +76,9 @@ router.put(
  * @access  Private/Admin/Finance
  */
 router.patch(
-  '/:id/status',
-  roleMiddleware('admin', 'finance_manager'),
-  [
-    check('is_active', 'Статус є обов\'язковим').isBoolean()
-  ],
+  "/:id/status",
+  roleMiddleware("admin", "finance_manager"),
+  [check("is_active", "Статус є обов'язковим").isBoolean()],
   agentsController.updateAgentStatus
 );
 
@@ -91,10 +87,6 @@ router.patch(
  * @desc    Видалення агента
  * @access  Private/Admin
  */
-router.delete(
-  '/:id',
-  roleMiddleware('admin'),
-  agentsController.deleteAgent
-);
+router.delete("/:id", roleMiddleware("admin"), agentsController.deleteAgent);
 
 module.exports = router;

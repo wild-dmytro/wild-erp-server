@@ -604,10 +604,12 @@ const updatePartner = async (id, partnerData) => {
         id,
       ]);
       if (brands.length > 0) {
-        const brandValues = brands
+        const brandIds = brands.map((elem) => elem.id);
+
+        const brandValues = brandIds
           .map((brandId, index) => `($1, $${index + 2})`)
           .join(", ");
-        const brandParams = [id, ...brands];
+        const brandParams = [id, ...brandIds];
 
         await client.query(
           `INSERT INTO partner_brands (partner_id, brand_id) VALUES ${brandValues}`,
@@ -621,10 +623,12 @@ const updatePartner = async (id, partnerData) => {
         id,
       ]);
       if (geos.length > 0) {
-        const geoValues = geos
+        const geoIds = geos.map((elem) => elem.id);
+
+        const geoValues = geoIds
           .map((geoId, index) => `($1, $${index + 2})`)
           .join(", ");
-        const geoParams = [id, ...geos];
+        const geoParams = [id, ...geoIds];
 
         await client.query(
           `INSERT INTO partner_geos (partner_id, geo_id) VALUES ${geoValues}`,

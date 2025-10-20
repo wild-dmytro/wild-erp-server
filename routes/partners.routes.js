@@ -132,7 +132,7 @@ router.put(
     check("contact_telegram", "Telegram контакт має бути рядком")
       .optional()
       .isString(),
-    check("contact_email", "Email має бути валідним").optional().isEmail(),
+    // check("contact_email", "Email має бути валідним").optional().isEmail(),
     check("partner_link", "Посилання партнера має бути рядком")
       .optional()
       .isString(),
@@ -147,9 +147,9 @@ router.put(
       .isString(),
     check("description", "Опис має бути рядком").optional().isString(),
     check("brands", "Бренди мають бути масивом").optional().isArray(),
-    check("brands.*", "ID бренда має бути числом").optional().isInt(),
+    check("brands.*.id", "ID бренда має бути числом").optional().isInt(),
     check("geos", "Гео мають бути масивом").optional().isArray(),
-    check("geos.*", "ID гео має бути числом").optional().isInt(),
+    check("geos.*.id", "ID гео має бути числом").optional().isInt(),
     check("payment_methods", "Способи оплати мають бути масивом")
       .optional()
       .isArray(),
