@@ -153,13 +153,13 @@ router.put(
     check("payment_methods", "Способи оплати мають бути масивом")
       .optional()
       .isArray(),
-    check("payment_methods.*", "ID способу оплати має бути числом")
+    check("payment_methods.*.id", "ID способу оплати має бути числом")
       .optional()
       .isInt(),
     check("traffic_sources", "Джерела трафіку мають бути масивом")
       .optional()
       .isArray(),
-    check("traffic_sources.*", "ID джерела трафіку має бути числом")
+    check("traffic_sources.*.id", "ID джерела трафіку має бути числом")
       .optional()
       .isInt(),
   ],

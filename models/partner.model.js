@@ -643,10 +643,12 @@ const updatePartner = async (id, partnerData) => {
         [id]
       );
       if (payment_methods.length > 0) {
-        const paymentValues = payment_methods
+        const paymentIds = payment_methods.map((elem) => elem.id);
+
+        const paymentValues = paymentIds
           .map((pmId, index) => `($1, $${index + 2})`)
           .join(", ");
-        const paymentParams = [id, ...payment_methods];
+        const paymentParams = [id, ...paymentIds];
 
         await client.query(
           `INSERT INTO partner_payment_methods (partner_id, payment_method_id) VALUES ${paymentValues}`,
@@ -661,10 +663,12 @@ const updatePartner = async (id, partnerData) => {
         [id]
       );
       if (traffic_sources.length > 0) {
-        const trafficValues = traffic_sources
+        const trafficIds = traffic_sources.map((elem) => elem.id);
+
+        const trafficValues = trafficIds
           .map((tsId, index) => `($1, $${index + 2})`)
           .join(", ");
-        const trafficParams = [id, ...traffic_sources];
+        const trafficParams = [id, ...trafficIds];
 
         await client.query(
           `INSERT INTO partner_traffic_sources (partner_id, traffic_source_id) VALUES ${trafficValues}`,
