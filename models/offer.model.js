@@ -76,9 +76,6 @@ const getAllOffers = async ({
       paramIndex++;
     }
 
-    console.log(conditions);
-    console.log(params);
-
     return {
       whereClause: conditions.join(" AND "),
       params: params,
