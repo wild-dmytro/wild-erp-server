@@ -67,7 +67,7 @@ const getAllOffers = async ({
     // Пошук по назві, опису, умовам, KPI
     if (search) {
       conditions.push(`(
-        ${aliasPrefix}.name ILIKE $${paramIndex++} OR
+        ${aliasPrefix}.name ILIKE $${paramIndex} OR
         ${aliasPrefix}.description ILIKE $${paramIndex} OR
         ${aliasPrefix}.conditions ILIKE $${paramIndex} OR
         ${aliasPrefix}.kpi ILIKE $${paramIndex}
@@ -75,6 +75,9 @@ const getAllOffers = async ({
       params.push(`%${search}%`);
       paramIndex++;
     }
+
+    console.log(conditions);
+    console.log(params);
 
     return {
       whereClause: conditions.join(" AND "),
