@@ -187,15 +187,15 @@ const createFlow = async (req, res) => {
       }
     } else if (flowData.flow_type === "cpa") {
       // Для cpa типу перевіряємо цільове значення
-      if (
-        flowData.kpi_target_value === undefined ||
-        flowData.kpi_target_value === null
-      ) {
-        return res.status(400).json({
-          success: false,
-          message: "Для типу 'cpa' необхідно вказати цільове значення KPI",
-        });
-      }
+      // if (
+      //   flowData.kpi_target_value === undefined ||
+      //   flowData.kpi_target_value === null
+      // ) {
+      //   return res.status(400).json({
+      //     success: false,
+      //     message: "Для типу 'cpa' необхідно вказати цільове значення KPI",
+      //   });
+      // }
     }
 
     const newFlow = await flowModel.createFlow(flowData);
