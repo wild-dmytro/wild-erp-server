@@ -131,11 +131,11 @@ router.post(
   "/",
   roleMiddleware("admin", "teamlead", "bizdev"),
   [
-    check("name", "Назва потоку є обов'язковою").notEmpty().trim(),
-    check("name", "Назва потоку має бути від 3 до 255 символів").isLength({
-      min: 3,
-      max: 255,
-    }),
+    // check("name", "Назва потоку є обов'язковою").notEmpty().trim(),
+    // check("name", "Назва потоку має бути від 3 до 255 символів").isLength({
+    //   min: 3,
+    //   max: 255,
+    // }),
     check("offer_id", "ID оффера є обов'язковим").isInt(),
     check("geo_id", "ID гео має бути числом").optional().isInt(),
     check("team_id", "ID команди має бути числом").optional().isInt(),
@@ -144,9 +144,9 @@ router.post(
     check("flow_type", "Тип потоку є обов'язковим")
       .isIn(["cpa", "spend"])
       .withMessage("Тип потоку має бути cpa або spend"),
-    check("kpi_metric", "Метрика KPI є обов'язковою")
-      .isIn(["OAS", "CPD", "RD", "URD"])
-      .withMessage("Метрика KPI має бути одна з: OAS, CPD, RD, URD"),
+    // check("kpi_metric", "Метрика KPI є обов'язковою")
+    //   .isIn(["OAS", "CPD", "RD", "URD"])
+    //   .withMessage("Метрика KPI має бути одна з: OAS, CPD, RD, URD"),
 
     // Умовна валідація для CPA потоків
     check("kpi_target_value")
@@ -204,16 +204,16 @@ router.post(
     //   .isString(),
 
     // Інші поля (без змін)
-    check("status", "Недійсний статус потоку")
-      .optional()
-      .isIn(["active", "paused", "stopped", "pending", "archived"]),
+    // check("status", "Недійсний статус потоку")
+    //   .optional()
+    //   .isIn(["active", "paused", "stopped", "pending", "archived"]),
     check("cpa", "CPA має бути числом").optional().isFloat({ min: 0 }),
     check("currency", "Недійсна валюта")
       .optional()
       .isIn(["USD", "EUR", "GBP", "UAH"]),
-    check("is_active", "is_active має бути булевим значенням")
-      .optional()
-      .isBoolean(),
+    // check("is_active", "is_active має бути булевим значенням")
+    //   .optional()
+    //   .isBoolean(),
     check("conditions", "Умови мають бути рядком").optional().isString(),
     check("description", "Опис має бути рядком").optional().isString(),
     check("notes", "Нотатки мають бути рядком").optional().isString(),

@@ -379,16 +379,14 @@ const getFlowById = async (id) => {
  */
 const createFlow = async (flowData) => {
   const {
-    name,
     offer_id,
     geo_id,
     team_id,
-    // ДОДАНО: нові поля
     flow_type,
     kpi_metric,
     kpi_target_value,
     spend_percentage_ranges,
-    status = "active",
+    status = "draft",
     cpa = 0,
     currency = "USD",
     is_active = true,
@@ -402,42 +400,85 @@ const createFlow = async (flowData) => {
     landings,
     created_by,
     users = [],
+    integration_status = "to_do",
+    integration_tasks = [],
   } = flowData;
-
-  // Валідація даних
-  // const validation = validateFlowData(flowData);
-  // if (!validation.isValid) {
-  //   throw new Error(`Помилка валідації: ${validation.errors.join(", ")}`);
-  // }
 
   const client = await db.getClient();
 
   try {
     await client.query("BEGIN");
 
-    // Перевіряємо унікальність назви
+    // 1. Отримуємо назву команди
+    const teamQuery = await client.query(
+      "SELECT name FROM teams WHERE id = $1",
+      [team_id]
+    );
+
+    if (teamQuery.rows.length === 0) {
+      throw new Error("Команда не знайдена");
+    }
+
+    const teamName = teamQuery.rows[0].name;
+
+    // 2. Отримуємо назву офферу
+    const offerQuery = await client.query(
+      "SELECT name FROM offers WHERE id = $1",
+      [offer_id]
+    );
+
+    if (offerQuery.rows.length === 0) {
+      throw new Error("Офер не знайдений");
+    }
+
+    const offerName = offerQuery.rows[0].name;
+
+    // 3. Отримуємо наступний послідовний ID для потоку
+    const maxIdQuery = await client.query(
+      "SELECT MAX(id) as max_id FROM flows"
+    );
+
+    const nextId = (maxIdQuery.rows[0].max_id || 0) + 1;
+
+    // 4. Генеруємо назву у форматі: Команда-Офер-ID
+    // Замінюємо всі пробіли на дефіси
+    const generatedName = `${teamName}-${offerName}-${nextId}`
+      .replace(/\s+/g, "-") // Замінюємо пробіли на дефіси
+      .replace(/-+/g, "-"); // Видаляємо подвійні дефіси
+
+    // 5. Перевіряємо унікальність генерованої назви (на випадок)
     const nameCheck = await client.query(
       "SELECT id FROM flows WHERE name = $1",
-      [name]
+      [generatedName]
     );
 
     if (nameCheck.rows.length > 0) {
-      throw new Error("Потік з такою назвою вже існує");
+      throw new Error(`Потік з назвою "${generatedName}" уже існує`);
     }
 
-    // ОНОВЛЕНО: Створюємо потік з новими полями
+    // 6. Валідуємо integration_status
+    const validIntegrationStatuses = ["to_do", "pending", "completed"];
+    if (!validIntegrationStatuses.includes(integration_status)) {
+      throw new Error(`Невалідний integration_status: ${integration_status}`);
+    }
+
+    // 7. Встановлюємо ready_at якщо integration_status = completed
+    const readyAt = integration_status === "completed" ? new Date() : null;
+
+    // 8. Створюємо потік з генерованою назвою
     const flowQuery = `
       INSERT INTO flows (
         name, offer_id, geo_id, team_id, flow_type, kpi_metric,
         kpi_target_value, spend_percentage_ranges, status, cpa, currency, is_active,
-        start_date, stop_date, conditions, description, notes, cap, kpi, landings, created_by, updated_by
+        start_date, stop_date, conditions, description, notes, cap, kpi, landings, 
+        integration_status, integration_tasks, ready_at, created_by, updated_by
       )
-      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $21)
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $24)
       RETURNING *
     `;
 
     const flowResult = await client.query(flowQuery, [
-      name,
+      generatedName,
       offer_id,
       geo_id,
       team_id,
@@ -457,12 +498,17 @@ const createFlow = async (flowData) => {
       cap,
       kpi,
       landings,
+      integration_status,
+      integration_tasks && integration_tasks.length > 0
+        ? JSON.stringify(integration_tasks)
+        : null,
+      readyAt,
       created_by,
     ]);
 
     const newFlow = flowResult.rows[0];
 
-    // Додаємо користувачів до потоку
+    // 7. Додаємо користувачів до потоку
     if (users.length > 0) {
       for (const user of users) {
         await client.query(
@@ -499,7 +545,6 @@ const updateFlow = async (id, flowData) => {
     offer_id,
     geo_id,
     team_id,
-    // ДОДАНО: нові поля
     flow_type,
     kpi_metric,
     kpi_target_value,
@@ -516,6 +561,8 @@ const updateFlow = async (id, flowData) => {
     cap,
     kpi,
     landings,
+    integration_status,
+    integration_tasks,
     updated_by,
     users,
   } = flowData;
@@ -554,7 +601,6 @@ const updateFlow = async (id, flowData) => {
     values.push(team_id);
   }
 
-  // ДОДАНО: оновлення нових полів
   if (flow_type !== undefined) {
     setClauses.push(`flow_type = $${paramIndex++}`);
     values.push(flow_type);
@@ -597,16 +643,6 @@ const updateFlow = async (id, flowData) => {
     values.push(is_active);
   }
 
-  // if (start_date !== undefined) {
-  //   setClauses.push(`start_date = $${paramIndex++}`);
-  //   values.push(start_date);
-  // }
-
-  // if (stop_date !== undefined) {
-  //   setClauses.push(`stop_date = $${paramIndex++}`);
-  //   values.push(stop_date);
-  // }
-
   if (conditions !== undefined) {
     setClauses.push(`conditions = $${paramIndex++}`);
     values.push(conditions);
@@ -635,6 +671,32 @@ const updateFlow = async (id, flowData) => {
   if (landings !== undefined) {
     setClauses.push(`landings = $${paramIndex++}`);
     values.push(landings);
+  }
+
+  // ДОДАНО: підтримка нових полів
+  if (integration_status !== undefined) {
+    const validIntegrationStatuses = ["to_do", "pending", "completed"];
+    if (!validIntegrationStatuses.includes(integration_status)) {
+      throw new Error(`Невалідний integration_status: ${integration_status}`);
+    }
+
+    setClauses.push(`integration_status = $${paramIndex++}`);
+    values.push(integration_status);
+
+    // Встановлюємо ready_at якщо integration_status = completed
+    if (integration_status === "completed") {
+      setClauses.push(`ready_at = $${paramIndex++}`);
+      values.push(new Date());
+    }
+  }
+
+  if (integration_tasks !== undefined) {
+    setClauses.push(`integration_tasks = $${paramIndex++}`);
+    values.push(
+      integration_tasks && integration_tasks.length > 0
+        ? JSON.stringify(integration_tasks)
+        : null
+    );
   }
 
   if (updated_by !== undefined) {
