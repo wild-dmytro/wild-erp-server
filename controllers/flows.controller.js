@@ -172,19 +172,19 @@ const createFlow = async (req, res) => {
       }
 
       // Валідуємо множники (повинні бути числами, не процентами)
-      const invalidRanges = flowData.spend_percentage_ranges.filter(
-        (range) =>
-          typeof range.spend_multiplier !== "number" ||
-          range.spend_multiplier < 0
-      );
+      // const invalidRanges = flowData.spend_percentage_ranges.filter(
+      //   (range) =>
+      //     typeof range.spend_multiplier !== "number" ||
+      //     range.spend_multiplier < 0
+      // );
 
-      if (invalidRanges.length > 0) {
-        return res.status(400).json({
-          success: false,
-          message:
-            "spend_multiplier має бути числом >= 0 (множник, не проценти). Наприклад: 1.0 для 100%, 1.2 для 120%",
-        });
-      }
+      // if (invalidRanges.length > 0) {
+      //   return res.status(400).json({
+      //     success: false,
+      //     message:
+      //       "spend_multiplier має бути числом >= 0 (множник, не проценти). Наприклад: 1.0 для 100%, 1.2 для 120%",
+      //   });
+      // }
     } else if (flowData.flow_type === "cpa") {
       // Для cpa типу перевіряємо цільове значення
       // if (
