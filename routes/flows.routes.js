@@ -149,18 +149,18 @@ router.post(
     //   .withMessage("Метрика KPI має бути одна з: OAS, CPD, RD, URD"),
 
     // Умовна валідація для CPA потоків
-    check("kpi_target_value")
-      .if(body("flow_type").equals("cpa"))
-      .isNumeric()
-      .withMessage(
-        "Для CPA потоків необхідно вказати числове цільове значення KPI"
-      )
-      .custom((value) => {
-        if (value < 0) {
-          throw new Error("Цільове значення KPI не може бути від'ємним");
-        }
-        return true;
-      }),
+    // check("kpi_target_value")
+    //   .if(body("flow_type").equals("cpa"))
+    //   .isNumeric()
+    //   .withMessage(
+    //     "Для CPA потоків необхідно вказати числове цільове значення KPI"
+    //   )
+    //   .custom((value) => {
+    //     if (value < 0) {
+    //       throw new Error("Цільове значення KPI не може бути від'ємним");
+    //     }
+    //     return true;
+    //   }),
 
     // Умовна валідація для SPEND потоків
     // check("spend_percentage_ranges")
