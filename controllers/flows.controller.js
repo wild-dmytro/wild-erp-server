@@ -73,6 +73,7 @@ const getAllFlows = async (req, res) => {
       // ДОДАНО: фільтри за типом потоку та метрикою KPI
       flow_type: req.query.flow_type,
       kpi_metric: req.query.kpi_metric,
+      integration_status: req.query.integration_status,
 
       status: req.query.status,
       onlyActive: req.query.onlyActive === "true",
