@@ -23,7 +23,8 @@ const KPI_METRICS = {
 
 /**
  * Отримання всіх потоків з пагінацією та фільтрацією
- * ОНОВЛЕНО: додано поля flow_type, kpi_metric, kpi_target_value, spend_percentage_ranges
+ * ОНОВЛЕНО: додано поля flow_type, kpi_metric, kpi_target_value, spend_percentage_ranges,
+ * integration_status, integration_tasks, ready_at
  */
 const getAllFlows = async (options = {}) => {
   const {
@@ -47,9 +48,9 @@ const getAllFlows = async (options = {}) => {
     onlyActive,
     search,
     currency,
-    // ДОДАНО: фільтри за типом та метрикою
     flow_type,
     kpi_metric,
+    integration_status,
     sortBy = "created_at",
     sortOrder = "desc",
     startDate,
@@ -130,7 +131,6 @@ const getAllFlows = async (options = {}) => {
     params.push(currency);
   }
 
-  // ДОДАНО: фільтри за типом потоку та метрикою KPI
   if (flow_type) {
     conditions.push(`f.flow_type = $${paramIndex++}`);
     params.push(flow_type);
@@ -139,6 +139,12 @@ const getAllFlows = async (options = {}) => {
   if (kpi_metric) {
     conditions.push(`f.kpi_metric = $${paramIndex++}`);
     params.push(kpi_metric);
+  }
+
+  // ДОДАНО: фільтр за integration_status
+  if (integration_status) {
+    conditions.push(`f.integration_status = $${paramIndex++}`);
+    params.push(integration_status);
   }
 
   if (startDate) {
@@ -151,17 +157,13 @@ const getAllFlows = async (options = {}) => {
     params.push(endDate);
   }
 
-  // ВИПРАВЛЕНО: Пошук - використовуємо один параметр для всіх умов
+  // Пошук - використовуємо один параметр для всіх умов
   if (search) {
     const searchParam = `%${search}%`;
     conditions.push(
       `(f.name ILIKE $${paramIndex} OR f.description ILIKE $${paramIndex} OR o.name ILIKE $${paramIndex} OR g.name ILIKE $${paramIndex} OR tm.name ILIKE $${paramIndex} OR b.name ILIKE $${paramIndex})`
     );
     params.push(searchParam);
-    console.log(conditions);
-    console.log(searchParam);
-    console.log(paramIndex);
-
     paramIndex++;
   }
 
@@ -195,11 +197,13 @@ const getAllFlows = async (options = {}) => {
       f.updated_at,
       f.created_by,
       f.updated_by,
-      -- ДОДАНО: нові поля для типів та KPI
       f.flow_type,
       f.kpi_metric,
       f.kpi_target_value,
       f.spend_percentage_ranges,
+      f.integration_status,
+      f.integration_tasks,
+      f.ready_at,
       
       -- Інформація про офер
       o.name as offer_name,
@@ -252,7 +256,7 @@ const getAllFlows = async (options = {}) => {
   try {
     const [dataResult, countResult] = await Promise.all([
       db.query(dataQuery, dataParams),
-      db.query(countQuery, baseParams), // Використовуємо базові параметри без limit/offset
+      db.query(countQuery, baseParams),
     ]);
 
     const flows = dataResult.rows;
@@ -306,16 +310,19 @@ const getAllFlows = async (options = {}) => {
 
 /**
  * ОНОВЛЕНО: Отримання потоку за ID з повною інформацією включно з новими полями
+ * (integration_status, integration_tasks, ready_at)
  */
 const getFlowById = async (id) => {
   const query = `
     SELECT 
       f.*,
-      -- ДОДАНО: нові поля для типів та KPI
       f.flow_type,
       f.kpi_metric,
       f.kpi_target_value,
       f.spend_percentage_ranges,
+      f.integration_status,
+      f.integration_tasks,
+      f.ready_at,
       
       o.name as offer_name,
       o.conditions as offer_conditions,
