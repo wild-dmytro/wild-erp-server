@@ -15,7 +15,14 @@ router.use(authMiddleware);
  */
 router.get(
   "/",
-  roleMiddleware("admin", "teamlead", "bizdev", "affiliate_manager", "buyer"),
+  roleMiddleware(
+    "admin",
+    "teamlead",
+    "bizdev",
+    "affiliate_manager",
+    "buyer",
+    "integrator"
+  ),
   usersController.getAllUsers
 );
 

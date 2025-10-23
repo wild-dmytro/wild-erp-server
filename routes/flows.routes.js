@@ -19,7 +19,14 @@ router.use(authMiddleware);
  */
 router.get(
   "/",
-  roleMiddleware("admin", "teamlead", "bizdev", "buyer", "affiliate_manager"),
+  roleMiddleware(
+    "admin",
+    "teamlead",
+    "bizdev",
+    "buyer",
+    "affiliate_manager",
+    "integrator"
+  ),
   [
     query("page", "Номер сторінки має бути числом")
       .optional()
@@ -63,7 +70,14 @@ router.get(
  */
 router.get(
   "/stats/overview",
-  roleMiddleware("admin", "teamlead", "bizdev", "buyer", "affiliate_manager"),
+  roleMiddleware(
+    "admin",
+    "teamlead",
+    "bizdev",
+    "buyer",
+    "affiliate_manager",
+    "integrator"
+  ),
   [
     query("dateFrom", "Недійсна дата початку").optional().isDate(),
     query("dateTo", "Недійсна дата завершення").optional().isDate(),
@@ -229,7 +243,7 @@ router.post(
  */
 router.put(
   "/:id",
-  roleMiddleware("admin", "teamlead", "bizdev"),
+  roleMiddleware("admin", "teamlead", "bizdev", "integrator"),
   [
     check("id", "ID потоку має бути числом").isInt(),
     check("name", "Назва потоку має бути від 3 до 255 символів")
