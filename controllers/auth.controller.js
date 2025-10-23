@@ -8,6 +8,20 @@ const db = require("../config/db");
 const jwtConfig = require("../config/jwt");
 const userModel = require("../models/user.model");
 const { validationResult } = require("express-validator");
+const authLogger = require("../utils/authLogger");
+
+/**
+ * Отримує IP адресу клієнта
+ * @param {Object} req - Об'єкт запиту
+ * @returns {string} IP адреса
+ */
+const getClientIp = (req) => {
+  return (
+    (req.headers["x-forwarded-for"] || "").split(",")[0] ||
+    req.socket.remoteAddress ||
+    req.connection.remoteAddress
+  );
+};
 
 /**
  * Реєстрація нового користувача
@@ -86,21 +100,44 @@ exports.register = async (req, res) => {
  */
 exports.login = async (req, res) => {
   try {
+    // Отримуємо IP та User Agent
+    const clientIp = getClientIp(req);
+    const userAgent = req.headers["user-agent"] || "Unknown";
+    const username = req.body.username || "unknown";
+
     // Перевірка помилок валідації
     const errors = validationResult(req);
     if (!errors.isEmpty()) {
+      authLogger.logFailedLogin(
+        username,
+        "Помилка валідації: " +
+          errors
+            .array()
+            .map((e) => e.msg)
+            .join(", "),
+        clientIp,
+        userAgent
+      );
+
       return res.status(400).json({
         success: false,
         errors: errors.array(),
       });
     }
 
-    const { username, password } = req.body;
+    const { password } = req.body;
 
     // Автентифікація користувача
     const user = await userModel.authenticate(username, password);
 
     if (!user) {
+      authLogger.logFailedLogin(
+        username,
+        "Невірні облікові дані",
+        clientIp,
+        userAgent
+      );
+
       return res.status(401).json({
         success: false,
         message: "Невірні облікові дані",
@@ -112,6 +149,9 @@ exports.login = async (req, res) => {
       userId: user.id,
       role: user.web_role,
     });
+
+    // Логуємо успішну авторизацію
+    authLogger.logSuccessfulLogin(user.username, user.id, clientIp, userAgent);
 
     res.json({
       success: true,
@@ -128,7 +168,14 @@ exports.login = async (req, res) => {
       },
     });
   } catch (err) {
+    const clientIp = getClientIp(req);
+    const userAgent = req.headers["user-agent"] || "Unknown";
+    const username = req.body.username || "unknown";
+
     console.error("Помилка логіну:", err);
+
+    authLogger.logServerError(username, err.message, clientIp, userAgent);
+
     res.status(500).json({
       success: false,
       message: "Помилка сервера під час логіну",
