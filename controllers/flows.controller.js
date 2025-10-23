@@ -535,6 +535,7 @@ const applyRoleFilters = async (req, options) => {
   try {
     switch (userRole) {
       case "admin":
+      case "integrator":
       case "bizdev":
         // Повний доступ
         return { success: true };
